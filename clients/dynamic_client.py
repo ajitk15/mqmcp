@@ -20,9 +20,16 @@ from typing import Dict, List, Optional, Tuple
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from dotenv import load_dotenv
+try:
+    from metrics_logger import get_metrics_logger, MetricsTracker
+except ImportError:
+    from .metrics_logger import get_metrics_logger, MetricsTracker
 
 # Load environment variables
 load_dotenv()
+
+# Initialize logger
+logger = get_metrics_logger("mq-dynamic-client")
 
 
 class DynamicMQClient:
@@ -222,7 +229,8 @@ class DynamicMQClient:
         print("    Calling tool: dspmq")
         
         try:
-            result = await self.session.call_tool("dspmq", {})
+            with MetricsTracker(logger, "dspmq", {"interface": "dynamic_client"}):
+                result = await self.session.call_tool("dspmq", {})
             return f"**Tool:** `dspmq`\n**Command:** `dspmq`\n\n**Result:**\n{result.content[0].text}"
         except Exception as e:
             return f"Error: {e}"
@@ -233,7 +241,8 @@ class DynamicMQClient:
         print("    Calling tool: dspmqver")
         
         try:
-            result = await self.session.call_tool("dspmqver", {})
+            with MetricsTracker(logger, "dspmqver", {"interface": "dynamic_client"}):
+                result = await self.session.call_tool("dspmqver", {})
             return f"**Tool:** `dspmqver`\n**Command:** `dspmqver`\n\n**Result:**\n{result.content[0].text}"
         except Exception as e:
             return f"Error: {e}"
@@ -253,10 +262,11 @@ class DynamicMQClient:
         mqsc_command = f"DISPLAY QLOCAL({queue_name}) CURDEPTH"
         
         try:
-            result = await self.session.call_tool("runmqsc", {
-                "qmgr_name": qmgr,
-                "mqsc_command": mqsc_command
-            })
+            with MetricsTracker(logger, "runmqsc", {"qmgr": qmgr, "cmd": mqsc_command}):
+                result = await self.session.call_tool("runmqsc", {
+                    "qmgr_name": qmgr,
+                    "mqsc_command": mqsc_command
+                })
             return f"**Tool:** `runmqsc`\n**Command:** `runmqsc` ({qmgr}) -> `{mqsc_command}`\n\n**Result:**\n{result.content[0].text}"
         except Exception as e:
             return f"Error: {e}"
@@ -274,10 +284,11 @@ class DynamicMQClient:
         mqsc_command = "DISPLAY QLOCAL(*)"
         
         try:
-            result = await self.session.call_tool("runmqsc", {
-                "qmgr_name": qmgr,
-                "mqsc_command": mqsc_command
-            })
+            with MetricsTracker(logger, "runmqsc", {"qmgr": qmgr, "cmd": mqsc_command}):
+                result = await self.session.call_tool("runmqsc", {
+                    "qmgr_name": qmgr,
+                    "mqsc_command": mqsc_command
+                })
             return f"**Tool:** `runmqsc`\n**Command:** `runmqsc` ({qmgr}) -> `{mqsc_command}`\n\n**Result:**\n{result.content[0].text}"
         except Exception as e:
             return f"Error: {e}"
@@ -295,10 +306,11 @@ class DynamicMQClient:
         mqsc_command = "DISPLAY CHANNEL(*)"
         
         try:
-            result = await self.session.call_tool("runmqsc", {
-                "qmgr_name": qmgr,
-                "mqsc_command": mqsc_command
-            })
+            with MetricsTracker(logger, "runmqsc", {"qmgr": qmgr, "cmd": mqsc_command}):
+                result = await self.session.call_tool("runmqsc", {
+                    "qmgr_name": qmgr,
+                    "mqsc_command": mqsc_command
+                })
             return f"**Tool:** `runmqsc`\n**Command:** `runmqsc` ({qmgr}) -> `{mqsc_command}`\n\n**Result:**\n{result.content[0].text}"
         except Exception as e:
             return f"Error: {e}"
@@ -317,10 +329,11 @@ class DynamicMQClient:
         mqsc_command = f"DISPLAY QSTATUS({queue_name})"
         
         try:
-            result = await self.session.call_tool("runmqsc", {
-                "qmgr_name": qmgr,
-                "mqsc_command": mqsc_command
-            })
+            with MetricsTracker(logger, "runmqsc", {"qmgr": qmgr, "cmd": mqsc_command, "queue": queue_name}):
+                result = await self.session.call_tool("runmqsc", {
+                    "qmgr_name": qmgr,
+                    "mqsc_command": mqsc_command
+                })
             return f"**Tool:** `runmqsc`\n**Command:** `runmqsc` ({qmgr}) -> `{mqsc_command}`\n\n**Result:**\n{result.content[0].text}"
         except Exception as e:
             return f"Error: {e}"
@@ -337,10 +350,11 @@ class DynamicMQClient:
         
         mqsc_command = f"DISPLAY CHSTATUS({channel_name})"
         try:
-            result = await self.session.call_tool("runmqsc", {
-                "qmgr_name": qmgr,
-                "mqsc_command": mqsc_command
-            })
+            with MetricsTracker(logger, "runmqsc", {"qmgr": qmgr, "cmd": mqsc_command, "channel": channel_name}):
+                result = await self.session.call_tool("runmqsc", {
+                    "qmgr_name": qmgr,
+                    "mqsc_command": mqsc_command
+                })
             return f"**Tool:** `runmqsc`\n**Command:** `runmqsc` ({qmgr}) -> `{mqsc_command}`\n\n**Result:**\n{result.content[0].text}"
         except Exception as e:
             return f"Error: {e}"
@@ -356,10 +370,11 @@ class DynamicMQClient:
         
         mqsc_command = "DISPLAY LSSTATUS(*)"
         try:
-            result = await self.session.call_tool("runmqsc", {
-                "qmgr_name": qmgr,
-                "mqsc_command": mqsc_command
-            })
+            with MetricsTracker(logger, "runmqsc", {"qmgr": qmgr, "cmd": mqsc_command}):
+                result = await self.session.call_tool("runmqsc", {
+                    "qmgr_name": qmgr,
+                    "mqsc_command": mqsc_command
+                })
             return f"**Tool:** `runmqsc`\n**Command:** `runmqsc` ({qmgr}) -> `{mqsc_command}`\n\n**Result:**\n{result.content[0].text}"
         except Exception as e:
             return f"Error: {e}"
@@ -375,10 +390,11 @@ class DynamicMQClient:
         
         mqsc_command = "DISPLAY QMGR"
         try:
-            result = await self.session.call_tool("runmqsc", {
-                "qmgr_name": qmgr,
-                "mqsc_command": mqsc_command
-            })
+            with MetricsTracker(logger, "runmqsc", {"qmgr": qmgr, "cmd": mqsc_command}):
+                result = await self.session.call_tool("runmqsc", {
+                    "qmgr_name": qmgr,
+                    "mqsc_command": mqsc_command
+                })
             return f"**Tool:** `runmqsc`\n**Command:** `runmqsc` ({qmgr}) -> `{mqsc_command}`\n\n**Result:**\n{result.content[0].text}"
         except Exception as e:
             return f"Error: {e}"

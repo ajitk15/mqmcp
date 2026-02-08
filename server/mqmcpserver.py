@@ -16,6 +16,7 @@ import logging
 import httpx
 import json
 import sys
+import asyncio
 
 import os
 from typing import Any
@@ -156,7 +157,32 @@ def prettify_runmqsc(payload: str) -> str:
     
     return prettifiedOutput
 
+async def verify_connectivity():
+    """Verify that the MQ REST API is reachable before starting the server"""
+    if not URL_BASE or not USER_NAME:
+        return
+        
+    sys.stderr.write(f"DEBUG: Verifying connectivity to {URL_BASE}...\n")
+    auth = httpx.BasicAuth(username=USER_NAME, password=PASSWORD)
+    async with httpx.AsyncClient(verify=False, auth=auth) as client:
+        try:
+            # Try to hit the installation endpoint as a lightweight check
+            response = await client.get(URL_BASE + "installation", timeout=5.0)
+            if response.status_code == 200:
+                sys.stderr.write("✅ SUCCESS: MQ REST API is responsive.\n")
+            else:
+                sys.stderr.write(f"⚠️ WARNING: MQ REST API returned status {response.status_code}. Please check your .env credentials.\n")
+        except Exception as e:
+            sys.stderr.write(f"❌ CRITICAL: Cannot reach MQ REST API. Ensure 'dspmqweb' is running on the MQ server.\n")
+            sys.stderr.write(f"   Error: {str(e)}\n\n")
+
 if __name__ == "__main__":
+    # Perform pre-flight connectivity check
+    try:
+        asyncio.run(verify_connectivity())
+    except Exception as e:
+        sys.stderr.write(f"DEBUG: Connectivity check skipped or failed: {e}\n")
+
     # Initialize and run the server on http://127.0.0.1:8000/mcp
     #mcp.run(transport='streamable-http')
     # If using IBM Bob then use one of these

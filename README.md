@@ -45,6 +45,11 @@ mq/
 
 ## 🚀 Quick Start
 
+### 0. MQ REST API Prerequisite
+Before running the ecosystem, ensure the IBM MQ REST API (mqweb) is active on your MQ server.
+- **Check Status**: Run `dspmqweb status` on the MQ server.
+- **Start Service**: Run `strmqweb` if it is not already running.
+
 ### 1. Environment Setup
 
 We recommend using a Python virtual environment:

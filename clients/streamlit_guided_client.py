@@ -147,61 +147,57 @@ valid_choices = [k for k, v in QUESTIONS.items() if not v.get("header")]
 col_main, col_spacer = st.columns([2, 1])
 
 with col_main:
-    st.markdown('<div class="operation-card">', unsafe_allow_html=True)
-    st.markdown("### 📋 Configure Operation")
-    
-    choice = st.selectbox("What task would you like to perform?", valid_choices, help="Select an MQ task from the list")
-    
-    if choice != "Select an operation...":
-        config = QUESTIONS[choice]
-        st.info(f"💡 **Description:** {config['description']}")
+    with st.container(border=True):
+        choice = st.selectbox("What task would you like to perform?", valid_choices, help="Select an MQ task from the list")
         
-        params = {}
-        # Dynamic Input Fields in a neat container
-        if "inputs" in config and config["inputs"]:
-            st.markdown('<p class="input-label">Required Parameters</p>', unsafe_allow_html=True)
-            input_container = st.container(border=True)
-            with input_container:
-                cols = st.columns(len(config["inputs"]))
-                for i, input_key in enumerate(config["inputs"]):
-                    with cols[i]:
-                        if input_key == "qmgr":
-                            label = "Queue Manager"
-                            placeholder = "e.g. QM1"
-                        elif input_key == "queue":
-                            label = "Queue Name"
-                            placeholder = "e.g. APP.QUEUE"
-                        elif input_key == "channel":
-                            label = "Channel Name"
-                            placeholder = "e.g. TO.SERVER"
-                        else:
-                            label = input_key.capitalize()
-                            placeholder = ""
-                        
-                        params[input_key] = st.text_input(label, placeholder=placeholder, key=f"in_{input_key}_{choice}")
+        if choice != "Select an operation...":
+            config = QUESTIONS[choice]
+            st.info(f"💡 **Description:** {config['description']}")
+            
+            params = {}
+            # Dynamic Input Fields in a neat container
+            if "inputs" in config and config["inputs"]:
+                st.markdown('<p class="input-label">Required Parameters</p>', unsafe_allow_html=True)
+                input_container = st.container(border=True)
+                with input_container:
+                    cols = st.columns(len(config["inputs"]))
+                    for i, input_key in enumerate(config["inputs"]):
+                        with cols[i]:
+                            if input_key == "qmgr":
+                                label = "Queue Manager"
+                                placeholder = "e.g. QM1"
+                            elif input_key == "queue":
+                                label = "Queue Name"
+                                placeholder = "e.g. APP.QUEUE"
+                            elif input_key == "channel":
+                                label = "Channel Name"
+                                placeholder = "e.g. TO.SERVER"
+                            else:
+                                label = input_key.capitalize()
+                                placeholder = ""
+                            
+                            params[input_key] = st.text_input(label, placeholder=placeholder, key=f"in_{input_key}_{choice}")
 
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🚀 Execute MQ Command", type="primary", use_container_width=True):
-            if "inputs" in config and all(params.get(k) for k in config["inputs"]):
-                final_prompt = config["prompt"]
-                if params:
-                    final_prompt = final_prompt.format(**params)
-                
-                with st.status("Executing Command...", expanded=True) as status:
-                    st.write(f"Connecting to IBM MQ...")
-                    response = asyncio.run(run_mcp_command(final_prompt))
-                    status.update(label="Run Complete!", state="complete", expanded=False)
-                
-                st.chat_message("assistant").markdown(response)
-            elif not config.get("inputs"):
-                with st.chat_message("assistant"):
-                    with st.spinner("Executing..."):
-                        response = asyncio.run(run_mcp_command(config["prompt"]))
-                        st.markdown(response)
-            else:
-                st.error("⚠️ Please provide all required parameters above.")
-    
-    st.markdown('</div>', unsafe_allow_html=True)
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("🚀 Execute MQ Command", type="primary", use_container_width=True):
+                if "inputs" in config and all(params.get(k) for k in config["inputs"]):
+                    final_prompt = config["prompt"]
+                    if params:
+                        final_prompt = final_prompt.format(**params)
+                    
+                    with st.status("Executing Command...", expanded=True) as status:
+                        st.write(f"Connecting to IBM MQ...")
+                        response = asyncio.run(run_mcp_command(final_prompt))
+                        status.update(label="Run Complete!", state="complete", expanded=False)
+                    
+                    st.chat_message("assistant").markdown(response)
+                elif not config.get("inputs"):
+                    with st.chat_message("assistant"):
+                        with st.spinner("Executing..."):
+                            response = asyncio.run(run_mcp_command(config["prompt"]))
+                            st.markdown(response)
+                else:
+                    st.error("⚠️ Please provide all required parameters above.")
 
 # Sidebar info
 with st.sidebar:

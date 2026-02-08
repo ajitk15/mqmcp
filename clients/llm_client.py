@@ -16,11 +16,20 @@ Setup:
 import asyncio
 import json
 import os
+import sys
+from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from dotenv import load_dotenv
+try:
+    from metrics_logger import get_metrics_logger, MetricsTracker
+except ImportError:
+    from .metrics_logger import get_metrics_logger, MetricsTracker
 
 # Load environment variables
 load_dotenv()
+
+# Initialize logger
+logger = get_metrics_logger("mq-llm-client")
 
 # Try to import LLM libraries
 try:
@@ -208,7 +217,8 @@ class LLMToolCaller:
                 print(f"   📞 Calling: {tool_name}({tool_args})")
                 
                 # Call the MCP tool
-                result = await self.session.call_tool(tool_name, tool_args)
+                with MetricsTracker(logger, tool_name, {"provider": self.provider, "args": tool_args}):
+                    result = await self.session.call_tool(tool_name, tool_args)
                 tool_result = result.content[0].text
                 
                 # Add tool result to history
@@ -277,7 +287,8 @@ class LLMToolCaller:
                 print(f"🔧 Claude decided to call: {tool_name}({tool_input})")
                 
                 # Call MCP tool
-                result = await self.session.call_tool(tool_name, tool_input)
+                with MetricsTracker(logger, tool_name, {"provider": self.provider, "args": tool_input}):
+                    result = await self.session.call_tool(tool_name, tool_input)
                 tool_result = result.content[0].text
                 
                 tool_results.append({
