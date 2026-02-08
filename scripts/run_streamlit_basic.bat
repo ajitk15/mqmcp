@@ -15,5 +15,5 @@ if not exist "..\venv\Scripts\activate.bat" (
 
 REM Activate venv and run streamlit
 call ..\venv\Scripts\activate.bat
-streamlit run ..\clients\streamlit_basic_client.py
+streamlit run ..\clients\streamlit_basic_client.py --server.port 8501
 pause

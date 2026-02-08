@@ -7,91 +7,18 @@ from dynamic_client import DynamicMQClient
 # Set up page config
 st.set_page_config(page_title="IBM MQ Assistant", page_icon="🤖", layout="wide")
 
-# Custom CSS for a professional light theme
-st.markdown("""
-<style>
-    .stApp {
-        background-color: #f1f5f9;
-        color: #1e293b;
-    }
-    [data-testid="stChatMessage"] {
-        border-radius: 12px;
-        margin-bottom: 8px;
-        padding: 4px 12px !important;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-    }
-    [data-testid="stChatMessage"] p, 
-    [data-testid="stChatMessage"] li, 
-    [data-testid="stChatMessage"] div,
-    [data-testid="stChatMessage"] span {
-        font-size: 14px !important;
-        line-height: 1.4 !important;
-    }
-    /* Compact the horizontal rules (the --- separators) */
-    [data-testid="stChatMessage"] hr {
-        margin: 8px 0 !important;
-        opacity: 0.2;
-    }
-    .stChatInputContainer {
-        padding-bottom: 20px;
-    }
-    /* Pulsing animation for loading */
-    @keyframes pulse {
-        0% { opacity: 0.6; transform: scale(0.98); }
-        50% { opacity: 1; transform: scale(1.01); }
-        100% { opacity: 0.6; transform: scale(0.98); }
-    }
-    .thinking-box {
-        background: #ffffff;
-        border: 1px solid #e2e8f0;
-        border-radius: 10px;
-        padding: 12px 20px;
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        animation: pulse 2s infinite ease-in-out;
-        width: fit-content;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-    }
-    .thinking-dot {
-        width: 8px;
-        height: 8px;
-        background: #3b82f6;
-        border-radius: 50%;
-    }
-    .stMarkdown h1 {
-        color: #0f172a;
-        font-weight: 800;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-st.title("🤖 IBM MQ Assistant")
-st.markdown("""
-<div style="background-color: #ffffff; border-left: 5px solid #3b82f6; padding: 15px; border-radius: 8px; margin-bottom: 25px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
-    <span style="color: #475569; font-weight: 600;">Basic Assistant:</span> 
-    <span style="color: #64748b;">Fast, predictable, and understands natural language through intelligent pattern matching.</span>
-</div>
-""", unsafe_allow_html=True)
-
 # Define the server script path
 script_dir = os.path.dirname(os.path.abspath(__file__))
 SERVER_SCRIPT = os.path.join(script_dir, "..", "server", "mqmcpserver.py")
 
 async def run_mcp_command(prompt):
-    """
-    Connects to the MCP server, runs the command, and disconnects.
-    This is the most reliable way to handle async stdio in Streamlit's 
-    stateless/sequential execution model.
-    """
+    """Execution logic from basic client"""
     client = DynamicMQClient(server_script=SERVER_SCRIPT)
     try:
         await client.connect()
-        # Override built-in input to prevent blocking
         import builtins
         original_input = builtins.input
         builtins.input = lambda _: ""
-        
         try:
             response = await client.handle_user_input(prompt)
             return response
@@ -99,7 +26,129 @@ async def run_mcp_command(prompt):
             builtins.input = original_input
             await client.disconnect()
     except Exception as e:
-        return f"❌ Error connecting to MQ Service: {str(e)}"
+        return f"❌ Error: {str(e)}"
+
+# Connectivity Check logic
+mcp_status_html = '<span style="color: #ffcccc;">🔘 Checking...</span>'
+try:
+    res = asyncio.run(run_mcp_command("dspmq"))
+    if "❌" in res:
+        mcp_status_html = '<span style="color: #ff9999;">🔴 MCP Offline</span>'
+    else:
+        mcp_status_html = '<span style="color: #ccffcc;">🟢 MCP Online</span>'
+except:
+    mcp_status_html = '<span style="color: #ff9999;">🔴 MCP Error</span>'
+
+# CUSTOM CSS & GLOBAL UI COMPONENTS
+st.markdown(f"""
+<style>
+    .stApp {{
+        background-color: #ffffff;
+        color: #333333;
+    }}
+    
+    /* Global Fixed Top Bar */
+    .top-nav {{
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        background-color: #4C8C2B;
+        color: white;
+        padding: 12px 25px;
+        z-index: 1000;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }}
+    .top-nav h2 {{
+        color: white !important;
+        margin: 0 !important;
+        font-size: 20px !important;
+    }}
+
+    /* Layout adjustments for fixed header */
+    .block-container {{
+        padding-top: 5rem !important;
+        padding-bottom: 6rem !important;
+    }}
+
+    [data-testid="stChatMessage"] {{
+        border-radius: 12px;
+        margin-bottom: 8px;
+        padding: 4px 12px !important;
+        background-color: #f7f9f7 !important;
+        border: 1px solid #e1e8e1;
+    }}
+
+    /* Pulsing animation for loading */
+    @keyframes pulse {{
+        0% {{ opacity: 0.6; transform: scale(0.98); }}
+        50% {{ opacity: 1; transform: scale(1.01); }}
+        100% {{ opacity: 0.6; transform: scale(0.98); }}
+    }}
+    .thinking-box {{
+        background: #ffffff;
+        border: 1px solid #e1e8e1;
+        border-radius: 10px;
+        padding: 12px 20px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        animation: pulse 2s infinite ease-in-out;
+        width: fit-content;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+    }}
+    .thinking-dot {{
+        width: 8px;
+        height: 8px;
+        background: #76BC21;
+        border-radius: 50%;
+    }}
+
+    /* Hide Streamlit default components */
+    header {{visibility: hidden; height: 0px !important;}}
+    #MainMenu {{visibility: hidden;}}
+    footer {{visibility: hidden;}}
+    .stApp > header {{display: none !important;}}
+
+    /* Fixed Footer */
+    .fixed-footer {{
+        position: fixed;
+        left: 0;
+        bottom: 0;
+        width: 100%;
+        background-color: #ffffff;
+        color: #888888;
+        text-align: center;
+        padding: 8px 0;
+        font-size: 11px;
+        border-top: 1px solid #eeeeee;
+        z-index: 999;
+    }}
+</style>
+
+<div class="top-nav">
+    <div>
+        <h2 style="display: inline; margin-right: 10px;">🤖 IBM MQ Assistant</h2>
+    </div>
+    <div style="font-weight: 600; font-size: 14px;">
+        {mcp_status_html}
+    </div>
+</div>
+
+<div class="fixed-footer">
+    v1.2 Basic MQ Client | Server: mqmcpserver.py
+</div>
+""", unsafe_allow_html=True)
+
+st.markdown("""
+<div style="background-color: #f1f8e9; border-left: 5px solid #76BC21; padding: 15px; border-radius: 8px; margin-bottom: 25px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
+    <span style="color: #2e7d32; font-weight: 600;">Basic Assistant:</span> 
+    <span style="color: #555555;">Fast, predictable, and understands natural language through intelligent pattern matching.</span>
+</div>
+""", unsafe_allow_html=True)
 
 # Chat interface initialization
 if "messages_basic" not in st.session_state:
@@ -137,16 +186,3 @@ if prompt := st.chat_input("Ask something about IBM MQ..."):
     
     # Add assistant response to chat history
     st.session_state.messages_basic.append({"role": "assistant", "content": full_response})
-
-# Sidebar info
-with st.sidebar:
-    st.header("System Info")
-    st.info(f"Server Script: {os.path.basename(SERVER_SCRIPT)}")
-    if st.button("Test Connection"):
-        with st.spinner("Testing connection to MCP server..."):
-            res = asyncio.run(run_mcp_command("dspmq"))
-            if "❌" in res:
-                st.error("Connection Failed")
-                st.write(res)
-            else:
-                st.success("Connection Successful!")

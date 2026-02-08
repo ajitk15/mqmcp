@@ -1,8 +1,8 @@
 @echo off
-REM Launcher for Streamlit OpenAI Client
-echo ========================================
-echo Starting Streamlit OpenAI MQ Assistant...
-echo ========================================
+REM Launcher for Streamlit Guided Assistant
+echo ===========================================
+echo Starting Streamlit Guided MQ Assistant...
+echo ===========================================
 echo.
 
 REM Check if venv exists
@@ -15,5 +15,5 @@ if not exist "..\venv\Scripts\activate.bat" (
 
 REM Activate venv and run streamlit
 call ..\venv\Scripts\activate.bat
-streamlit run ..\clients\streamlit_openai_client.py --server.port 8503
+streamlit run ..\clients\streamlit_guided_client.py --server.port 8502
 pause

@@ -6,59 +6,6 @@ from dynamic_client import DynamicMQClient
 # Set up page config
 st.set_page_config(page_title="IBM MQ Guided Assistant", page_icon="🛠️", layout="wide")
 
-# Custom CSS for a professional light theme
-st.markdown("""
-<style>
-    .stApp {
-        background-color: #f1f5f9;
-        color: #1e293b;
-    }
-    [data-testid="stChatMessage"] {
-        border-radius: 12px;
-        margin-bottom: 8px;
-        padding: 4px 12px !important;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-    }
-    [data-testid="stChatMessage"] p, 
-    [data-testid="stChatMessage"] li, 
-    [data-testid="stChatMessage"] div,
-    [data-testid="stChatMessage"] span {
-        font-size: 14px !important;
-        line-height: 1.4 !important;
-    }
-    /* Compact the horizontal rules */
-    [data-testid="stChatMessage"] hr {
-        margin: 8px 0 !important;
-        opacity: 0.2;
-    }
-    .operation-card {
-        background-color: white;
-        padding: 24px;
-        border-radius: 16px;
-        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
-        margin-bottom: 24px;
-        border: 1px solid #e2e8f0;
-    }
-    .input-label {
-        font-weight: 600;
-        font-size: 13px;
-        color: #334155;
-        margin-bottom: 6px;
-    }
-    .stTextInput input {
-        border-radius: 8px;
-        border: 1px solid #cbd5e1;
-        padding: 10px;
-    }
-    .stSelectbox div[data-baseweb="select"] {
-        border-radius: 12px;
-        border: 1px solid #cbd5e1;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-st.title("🛠️ IBM MQ Guided Assistant")
-
 # Define the server script path
 script_dir = os.path.dirname(os.path.abspath(__file__))
 SERVER_SCRIPT = os.path.join(script_dir, "..", "server", "mqmcpserver.py")
@@ -79,6 +26,107 @@ async def run_mcp_command(prompt):
             await client.disconnect()
     except Exception as e:
         return f"❌ Error: {str(e)}"
+
+# Connectivity Check logic
+mcp_status_html = '<span style="color: #ffcccc;">🔘 Checking...</span>'
+try:
+    res = asyncio.run(run_mcp_command("dspmq"))
+    if "❌" in res:
+        mcp_status_html = '<span style="color: #ff9999;">🔴 MCP Offline</span>'
+    else:
+        mcp_status_html = '<span style="color: #ccffcc;">🟢 MCP Online</span>'
+except:
+    mcp_status_html = '<span style="color: #ff9999;">🔴 MCP Error</span>'
+
+# CUSTOM CSS & GLOBAL UI COMPONENTS
+st.markdown(f"""
+<style>
+    .stApp {{
+        background-color: #ffffff;
+        color: #333333;
+    }}
+    
+    /* Global Fixed Top Bar */
+    .top-nav {{
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        background-color: #4C8C2B;
+        color: white;
+        padding: 12px 25px;
+        z-index: 1000;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }}
+    .top-nav h2 {{
+        color: white !important;
+        margin: 0 !important;
+        font-size: 20px !important;
+    }}
+
+    /* Layout adjustments for fixed header */
+    .block-container {{
+        padding-top: 5rem !important;
+        padding-bottom: 5rem !important;
+    }}
+
+    /* Primary brand colors */
+    h3 {{
+        color: #4C8C2B !important;
+        font-weight: 700 !important;
+    }}
+
+    /* Primary Button color */
+    .stButton > button {{
+        background-color: #76BC21 !important;
+        color: white !important;
+        border-radius: 25px !important;
+        border: none !important;
+        padding: 10px 24px !important;
+        font-weight: 600 !important;
+    }}
+    .stButton > button:hover {{
+        background-color: #4C8C2B !important;
+    }}
+
+    /* Hide Streamlit default components */
+    header {{visibility: hidden; height: 0px !important;}}
+    #MainMenu {{visibility: hidden;}}
+    footer {{visibility: hidden;}}
+    .stApp > header {{display: none !important;}}
+
+    /* Fixed Footer */
+    .fixed-footer {{
+        position: fixed;
+        left: 0;
+        bottom: 0;
+        width: 100%;
+        background-color: #ffffff;
+        color: #888888;
+        text-align: center;
+        padding: 8px 0;
+        font-size: 11px;
+        border-top: 1px solid #eeeeee;
+        z-index: 999;
+    }}
+</style>
+
+<div class="top-nav">
+    <div>
+        <h2 style="display: inline; margin-right: 10px;">🛠️ IBM MQ Guided Assistant</h2>
+    </div>
+    <div style="font-weight: 600; font-size: 14px;">
+        {mcp_status_html}
+    </div>
+</div>
+
+<div class="fixed-footer">
+    v1.2 Guided MQ Client | Server: mqmcpserver.py
+</div>
+""", unsafe_allow_html=True)
 
 # Define Expanded Predefined Questions
 QUESTIONS = {
@@ -133,85 +181,43 @@ QUESTIONS = {
     }
 }
 
-# Mapping of headers for the selector
-selector_options = []
-for k, v in QUESTIONS.items():
-    if v.get("header"):
-        selector_options.append(f"{v['icon']} {k.strip('- ')}")
-    else:
-        selector_options.append(k)
-
 valid_choices = [k for k, v in QUESTIONS.items() if not v.get("header")]
 
 # Main UI Logic
-col_main, col_spacer = st.columns([2, 1])
-
-with col_main:
-    with st.container(border=True):
-        choice = st.selectbox("What task would you like to perform?", valid_choices, help="Select an MQ task from the list")
-        
-        if choice != "Select an operation...":
-            config = QUESTIONS[choice]
-            st.info(f"💡 **Description:** {config['description']}")
-            
-            params = {}
-            # Dynamic Input Fields in a neat container
-            if "inputs" in config and config["inputs"]:
-                st.markdown('<p class="input-label">Required Parameters</p>', unsafe_allow_html=True)
-                input_container = st.container(border=True)
-                with input_container:
-                    cols = st.columns(len(config["inputs"]))
-                    for i, input_key in enumerate(config["inputs"]):
-                        with cols[i]:
-                            if input_key == "qmgr":
-                                label = "Queue Manager"
-                                placeholder = "e.g. QM1"
-                            elif input_key == "queue":
-                                label = "Queue Name"
-                                placeholder = "e.g. APP.QUEUE"
-                            elif input_key == "channel":
-                                label = "Channel Name"
-                                placeholder = "e.g. TO.SERVER"
-                            else:
-                                label = input_key.capitalize()
-                                placeholder = ""
-                            
-                            params[input_key] = st.text_input(label, placeholder=placeholder, key=f"in_{input_key}_{choice}")
-
-            st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("🚀 Execute MQ Command", type="primary", use_container_width=True):
-                if "inputs" in config and all(params.get(k) for k in config["inputs"]):
-                    final_prompt = config["prompt"]
-                    if params:
-                        final_prompt = final_prompt.format(**params)
-                    
-                    with st.status("Executing Command...", expanded=True) as status:
-                        st.write(f"Connecting to IBM MQ...")
-                        response = asyncio.run(run_mcp_command(final_prompt))
-                        status.update(label="Run Complete!", state="complete", expanded=False)
-                    
-                    st.chat_message("assistant").markdown(response)
-                elif not config.get("inputs"):
-                    with st.chat_message("assistant"):
-                        with st.spinner("Executing..."):
-                            response = asyncio.run(run_mcp_command(config["prompt"]))
-                            st.markdown(response)
-                else:
-                    st.error("⚠️ Please provide all required parameters above.")
-
-# Sidebar info
-with st.sidebar:
-    st.header("⚡ System Quick Actions")
-    if st.button("🔍 Connection Test", use_container_width=True):
-        with st.spinner("Checking..."):
-            res = asyncio.run(run_mcp_command("dspmq"))
-            if "❌" in res:
-                st.error("Server Unreachable")
-            else:
-                st.success("Server Online")
+with st.container(border=True):
+    choice = st.selectbox("What task would you like to perform?", valid_choices, help="Select an MQ task from the list")
     
-    st.divider()
-    st.markdown("### 🛠️ Environment")
-    st.code(f"Server: {os.path.basename(SERVER_SCRIPT)}", language="text")
-    st.markdown("---")
-    st.caption("v1.2 Guided MQ Client")
+    if choice != "Select an operation...":
+        config = QUESTIONS[choice]
+        st.info(f"💡 **Description:** {config['description']}")
+        
+        params = {}
+        # Dynamic Input Fields
+        if "inputs" in config and config["inputs"]:
+            st.markdown('**Required Parameters**')
+            cols = st.columns(len(config["inputs"]))
+            for i, input_key in enumerate(config["inputs"]):
+                with cols[i]:
+                    label = input_key.replace("qmgr", "Queue Manager").replace("queue", "Queue").replace("channel", "Channel").capitalize()
+                    params[input_key] = st.text_input(label, key=f"in_{input_key}_{choice}")
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("🚀 Execute MQ Command", type="primary", use_container_width=True):
+            if "inputs" in config and all(params.get(k) for k in config["inputs"]):
+                final_prompt = config["prompt"]
+                if params:
+                    final_prompt = final_prompt.format(**params)
+                
+                with st.status("Executing Command...", expanded=True) as status:
+                    st.write(f"Connecting to IBM MQ...")
+                    response = asyncio.run(run_mcp_command(final_prompt))
+                    status.update(label="Run Complete!", state="complete", expanded=False)
+                
+                st.chat_message("assistant").markdown(response)
+            elif not config.get("inputs"):
+                with st.chat_message("assistant"):
+                    with st.spinner("Executing..."):
+                        response = asyncio.run(run_mcp_command(config["prompt"]))
+                        st.markdown(response)
+            else:
+                st.error("⚠️ Please provide all required parameters above.")
