@@ -85,17 +85,41 @@ Choose your preferred flavor of the assistant:
 
 ## 🧪 Developer Testing
 
-The `test_mcp_client.py` provides a rich CLI interface for testing the server tools directly:
-
-```text
-Choose an option:
-  1. List available tools
-  2. Call dspmq (List Queue Managers)
-  3. Call dspmqver (Check MQ Version)
-  4. Call runmqsc (Execute MQSC Command)
-  5. Quick test - Check queue depth
-  6. Quick test - List all queues
+### 1. Built-in CLI Tester
+The project includes a dedicated tester script for quick validation:
+```powershell
+python clients/test_mcp_client.py
 ```
+
+### 2. Standalone MCP Inspector
+Use the official MCP Inspector to interact with the server via a web interface. This is great for debugging tool outputs.
+```powershell
+# Ensure venv is active
+npx @modelcontextprotocol/inspector python server/mqmcpserver.py
+```
+
+### 3. Claude Desktop Integration
+To use this server with Claude Desktop, add it to your configuration:
+- **Path**: `%APPDATA%\Claude\claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "ibm-mq": {
+      "command": "python",
+      "args": ["C:/absolute/path/to/mqmcp/server/mqmcpserver.py"],
+      "env": {
+        "MQ_URL_BASE": "https://host:port/ibmmq/rest/v3/admin/",
+        "MQ_USER_NAME": "mq-user",
+        "MQ_PASSWORD": "mq-password"
+      }
+    }
+  }
+}
+```
+
+### 4. VS Code Extensions (Cline / Roo Code)
+Add the server to your extension settings using the same `command`, `args`, and `env` parameters as above. This allows you to manage MQ directly from your IDE's AI assistant.
 
 ---
 

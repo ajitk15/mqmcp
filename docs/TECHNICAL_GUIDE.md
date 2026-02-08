@@ -63,6 +63,26 @@ The **Guided Assistant** combines specific task definitions with the dynamic cli
 | `Unknown Tool` | Server/Client mismatch | All clients now use `sys.executable` to ensure environment parity. |
 
 ---
+ 
+ ## 🧪 Standalone Testing & Validation
+ 
+ ### MCP Inspector (Debug Mode)
+ For isolated server testing without a full client, use the MCP Inspector. It launches the server and opens a local web UI where you can manually invoke tools and inspect JSON-RPC message flow.
+ 
+ ```powershell
+ # Run from the root directory
+ npx @modelcontextprotocol/inspector python server/mqmcpserver.py
+ ```
+ *Technical Note: The inspector captures `stdout` for the protocol and displays `stderr` in the terminal console, allowing you to see the "DEBUG" messages.*
+ 
+ ### Process-Level Configuration
+ When running as a standalone server (e.g., in Claude Desktop), the server needs to know where its dependencies and environment variables are.
+ 
+ 1.  **Environment Variables**: The server looks for a `.env` file in its current directory or one level up. If you are hosting it elsewhere, ensure you pass the `env` dictionary in your MCP config file.
+ 2.  **Working Directory**: On Windows, ensure paths use forward slashes `/` or double backslashes `\\` in JSON configurations to avoid escape character issues.
+ 
+ ---
+
 
 ## 💡 Best Practices
 
