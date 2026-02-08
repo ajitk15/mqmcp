@@ -1,0 +1,20 @@
+# Development and Testing Dependencies
+# Install with: pip install -r requirements-dev.txt
+
+# Include base requirements
+-r requirements.txt
+
+# Testing tools
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+
+# Code quality
+black>=24.0.0
+flake8>=7.0.0
+mypy>=1.8.0
+
+# Type stubs for better type checking
+types-httpx>=0.27.0
+
+# Optional: For MCP Inspector (requires Node.js)
+# Install separately with: npm install -g @modelcontextprotocol/inspector

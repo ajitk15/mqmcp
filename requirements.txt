@@ -1,0 +1,5 @@
+# IBM MQ MCP Server Dependencies
+httpx
+mcp
+streamlit
+python-dotenv

@@ -1,0 +1,16 @@
+# Optional LLM Dependencies
+# Install with: pip install -r requirements-llm.txt
+
+# Include base requirements
+-r requirements.txt
+
+# OpenAI for GPT-4 based tool calling
+openai>=1.12.0
+
+# Anthropic for Claude based tool calling
+anthropic>=0.18.0
+
+# Note: You only need to install one of the above, depending on which LLM you want to use
+# Set the appropriate API key:
+# - OPENAI_API_KEY for OpenAI
+# - ANTHROPIC_API_KEY for Anthropic
