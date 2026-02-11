@@ -47,6 +47,11 @@ def get_metrics_logger(name="mqmcp-metrics"):
         # Optionally log to a file if MQ_LOG_FILE is set
         log_file = os.getenv("MQ_LOG_FILE")
         if log_file:
+            # Ensure directory exists
+            log_dir = os.path.dirname(log_file)
+            if log_dir and not os.path.exists(log_dir):
+                os.makedirs(log_dir)
+                
             file_handler = logging.FileHandler(log_file)
             file_handler.setFormatter(SplunkMetricsFormatter())
             logger.addHandler(file_handler)
