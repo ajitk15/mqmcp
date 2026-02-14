@@ -47,6 +47,13 @@ def get_metrics_logger(name="mqmcp-metrics"):
         # Optionally log to a file if MQ_LOG_FILE is set
         log_file = os.getenv("MQ_LOG_FILE")
         if log_file:
+            # Make path absolute relative to project root (2 levels up from this file)
+            # This file is in clients/metrics_logger.py, project root is ../..
+            if not os.path.isabs(log_file):
+                script_dir = os.path.dirname(os.path.abspath(__file__))
+                project_root = os.path.dirname(script_dir)  # Go up from clients/ to project root
+                log_file = os.path.join(project_root, log_file)
+            
             # Ensure directory exists
             log_dir = os.path.dirname(log_file)
             if log_dir and not os.path.exists(log_dir):

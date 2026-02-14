@@ -2,11 +2,40 @@ import streamlit as st
 import asyncio
 import os
 import json
+import signal
+import atexit
 from llm_client import LLMToolCaller
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+
+# Cleanup handler for graceful shutdown
+def cleanup_on_exit():
+    """Cleanup resources on exit - non-blocking"""
+    import threading
+    
+    def do_cleanup():
+        try:
+            if hasattr(st, 'session_state'):
+                for key in list(st.session_state.keys()):
+                    obj = st.session_state.get(key)
+                    if obj and hasattr(obj, 'cleanup'):
+                        try:
+                            obj.cleanup()
+                        except:
+                            pass
+        except:
+            pass
+    
+    # Run cleanup in background thread (daemon) with short timeout
+    t = threading.Thread(target=do_cleanup, daemon=True)
+    t.start()
+    t.join(timeout=1)  # Wait max 1 second
+
+# Register only atexit handler - don't override Streamlit's signal handlers
+atexit.register(cleanup_on_exit)
+
 
 # Set up page config
 st.set_page_config(page_title="IBM MQ AI Assistant", page_icon="🧠", layout="wide")
@@ -19,29 +48,53 @@ SERVER_SCRIPT = os.path.join(script_dir, "..", "server", "mqmcpserver.py")
 if "openai_api_key" not in st.session_state:
     st.session_state.openai_api_key = os.getenv("OPENAI_API_KEY", "")
 
-async def run_llm_command(prompt):
-    """Execution logic for OpenAI Client"""
+async def run_llm_command(prompt, client):
+    """Execution logic for OpenAI Client - uses persistent client for conversation context"""
     if not st.session_state.openai_api_key:
-        return "⚠️ OpenAI API Key is missing. Please provide it in the sidebar."
-        
-    client = LLMToolCaller(server_script=SERVER_SCRIPT, provider="openai")
+        return None, "⚠️ OpenAI API Key is missing. Please provide it in the sidebar."
+    
     try:
-        await client.connect()
-        try:
-            response = await client.handle_user_input(prompt)
-            return response
-        finally:
-            await client.disconnect()
+        # Use the persistent client that maintains conversation history
+        response = await client.handle_user_input(prompt)
+        tools_used = client.tools_used  # Get the tools that were called
+        return tools_used, response
     except Exception as e:
-        return f"❌ Error: {str(e)}"
+        import traceback
+        error_msg = f"❌ Error: {str(e)}"
+        st.error(f"{error_msg}\n\n{traceback.format_exc()}")
+        return None, error_msg
+
+@st.cache_resource
+def get_llm_client():
+    """Get or create a persistent LLM client that maintains conversation history"""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    server_script = os.path.join(script_dir, "..", "server", "mqmcpserver.py")
+    return LLMToolCaller(server_script=server_script, provider="openai")
+
+@st.cache_resource
+def initialize_client():
+    """Initialize client connection"""
+    client = get_llm_client()
+    loop = get_event_loop()
+    try:
+        loop.run_until_complete(client.connect())
+        return client
+    except Exception as e:
+        st.error(f"Failed to initialize MCP client: {e}")
+        return None
+
+@st.cache_resource
+def get_event_loop():
+    """Get or create an event loop for async operations"""
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop
 
 # Connectivity Check logic (Shared with LLM for status)
-mcp_status_html = '<span style="color: #ffcccc;">🔘 Checking...</span>'
-try:
-    # Use simple dspmq-like logic if possible, or just assume LLM check
-    mcp_status_html = '<span style="color: #ccffcc;">🟢 AI Model Ready</span>'
-except:
-    mcp_status_html = '<span style="color: #ff9999;">🔴 MCP Error</span>'
+mcp_status_html = '<span style="color: #ccffcc;">🟢 AI Model Ready</span>'
 
 # CUSTOM CSS & GLOBAL UI COMPONENTS
 st.markdown(f"""
@@ -173,21 +226,44 @@ with st.sidebar:
     st.markdown("### 🛠️ Environment")
     st.code(f"Server: mqmcpserver.py", language="text")
 
+# Initialize persistent client on page load
+if "llm_client" not in st.session_state:
+    st.session_state.llm_client = initialize_client()
+    st.session_state.client_ready = st.session_state.llm_client is not None
+
 # Chat interface initialization
 if "messages_llm" not in st.session_state:
     st.session_state.messages_llm = [
-        {"role": "assistant", "content": "I'm your AI-powered IBM MQ assistant. How can I help you today? (e.g., 'Check if all queue managers are running')"}
+        {"role": "assistant", "content": "I'm your AI-powered IBM MQ assistant. How can I help you today? (e.g., 'Check if all queue managers are running')\n\n**💡 Tip:** I can maintain conversation context, so you can ask follow-up questions and I'll remember the context!"}
     ]
+
+# Display connection status
+if not st.session_state.client_ready:
+    st.warning("⚠️ MCP client not ready. Please refresh the page.")
 
 # Display chat messages
 for message in st.session_state.messages_llm:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
+        # Display tools used if available
+        if "tools_used" in message and message["tools_used"]:
+            with st.expander("🔧 Tools Used (in order)"):
+                for idx, tool in enumerate(message["tools_used"], 1):
+                    col1, col2 = st.columns([1, 4])
+                    with col1:
+                        st.markdown(f"**Step {idx}**")
+                    with col2:
+                        st.markdown(f"**`{tool['name']}`**")
+                    
+                    if tool.get('args'):
+                        st.json(tool['args'], expanded=False)
 
 # User input
 if prompt := st.chat_input("Ask something about IBM MQ..."):
     if not st.session_state.openai_api_key:
         st.error("Please provide an OpenAI API Key in the sidebar.")
+    elif not st.session_state.client_ready:
+        st.error("MCP client is not ready. Please refresh the page.")
     else:
         # Add user message to chat history
         st.session_state.messages_llm.append({"role": "user", "content": prompt})
@@ -197,6 +273,7 @@ if prompt := st.chat_input("Ask something about IBM MQ..."):
         # Generate response
         with st.chat_message("assistant"):
             message_placeholder = st.empty()
+            tools_placeholder = st.empty()
             message_placeholder.markdown("""
                 <div class="thinking-box">
                     <div class="thinking-dot" style="animation-delay: 0s"></div>
@@ -206,8 +283,35 @@ if prompt := st.chat_input("Ask something about IBM MQ..."):
                 </div>
             """, unsafe_allow_html=True)
             
-            full_response = asyncio.run(run_llm_command(prompt))
+            try:
+                loop = get_event_loop()
+                # Pass the persistent client to maintain conversation history
+                tools_used, full_response = loop.run_until_complete(
+                    run_llm_command(prompt, st.session_state.llm_client)
+                )
+            except Exception as e:
+                import traceback
+                tools_used = None
+                full_response = f"❌ Error: {str(e)}\n\n{traceback.format_exc()}"
+            
             message_placeholder.markdown(full_response)
+            
+            # Display tools used
+            if tools_used:
+                with tools_placeholder.expander("🔧 Tools Used by AI (in order)"):
+                    for idx, tool in enumerate(tools_used, 1):
+                        col1, col2 = st.columns([1, 4])
+                        with col1:
+                            st.markdown(f"**Step {idx}**")
+                        with col2:
+                            st.markdown(f"**`{tool['name']}`**")
+                        
+                        if tool.get('args'):
+                            st.json(tool['args'], expanded=False)
         
-        # Add assistant response to chat history
-        st.session_state.messages_llm.append({"role": "assistant", "content": full_response})
+        # Add assistant response to chat history with tools used
+        st.session_state.messages_llm.append({
+            "role": "assistant", 
+            "content": full_response,
+            "tools_used": tools_used
+        })

@@ -23,6 +23,9 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 from dotenv import load_dotenv
 
+import pandas as pd
+from pathlib import Path
+
 # Load environment variables from .env file
 # Try to find .env in current dir or parent dir (to handle different launch paths)
 env_path = os.path.join(os.getcwd(), ".env")
@@ -37,6 +40,37 @@ URL_BASE = os.getenv("MQ_URL_BASE")
 USER_NAME = os.getenv("MQ_USER_NAME")
 PASSWORD = os.getenv("MQ_PASSWORD")
 
+CSV_PATH = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) / "resources" / "qmgr_dump.csv"
+
+def load_csv():
+    """
+    Load CSV into dataframe with pipe delimiter
+    """
+    if not CSV_PATH.exists():
+        sys.stderr.write(f"⚠️ WARNING: CSV file not found at {CSV_PATH}\n")
+        return pd.DataFrame()
+
+    try:
+        # Load CSV with pipe delimiter - no header row in the file
+        # Format: hostname | qmgr | object_type | mqsc_command
+        df = pd.read_csv(
+            CSV_PATH, 
+            delimiter="|", 
+            skipinitialspace=True,
+            header=None,  # No header row in CSV
+            names=['hostname', 'qmgr', 'object_type', 'mqsc_command']  # Define column names explicitly
+        )
+        
+        sys.stderr.write(f"✅ CSV loaded successfully: {len(df)} rows, {len(df.columns)} columns\n")
+        sys.stderr.write(f"   Columns: {list(df.columns)}\n")
+        return df
+    except Exception as e:
+        sys.stderr.write(f"❌ ERROR loading CSV: {str(e)}\n")
+        import traceback
+        sys.stderr.write(traceback.format_exc())
+        return pd.DataFrame()
+
+
 # Debugging: Write to stderr instead of stdout (Stdout is reserved for MCP protocol)
 sys.stderr.write(f"DEBUG: Loading .env from {env_path}\n")
 sys.stderr.write(f"DEBUG: Target MQ URL: {URL_BASE}\n")
@@ -45,8 +79,144 @@ sys.stderr.write(f"DEBUG: Target MQ User: {USER_NAME}\n")
 if not URL_BASE or not USER_NAME:
     sys.stderr.write("❌ CRITICAL ERROR: MQ_URL_BASE or MQ_USER_NAME is not set in .env\n")
 
-# Initialize FastMCP server
+# Initialize FastMCP server (for stdio mode, no port needed)
 mcp = FastMCP("mqmcpserver")
+
+
+# ----------------------------
+# RESOURCE
+# ----------------------------
+
+@mcp.resource("qmgr://dump")
+def get_qmgr_dump() -> list:
+    """
+    Return full QMGR dump as JSON
+    """
+    df = load_csv()
+
+    if df.empty:
+        return []
+
+    return df.to_dict(orient="records")
+
+
+# ----------------------------
+# TOOL — SEARCH
+# ----------------------------
+
+@mcp.tool()
+def search_qmgr_dump(search_string: str) -> str:
+    """
+    Search QMGR dump by any string and return matching records with hostname, queue manager, and object type.
+    Returns a formatted string with the most relevant columns for quick identification.
+    """
+
+    sys.stderr.write(f"DEBUG: search_qmgr_dump called with search_string: '{search_string}'\n")
+
+    df = load_csv()
+
+    if df.empty:
+        sys.stderr.write("DEBUG: CSV is empty. Returning empty result.\n")
+        return f"No records found. CSV file may be empty."
+
+    sys.stderr.write(f"DEBUG: CSV loaded with {len(df)} rows\n")
+    sys.stderr.write(f"DEBUG: CSV columns: {list(df.columns)}\n")
+
+    # Case-insensitive search across all columns
+    mask = df.astype(str).apply(
+        lambda row: row.str.contains(
+            search_string,
+            case=False,
+            na=False
+        ).any(),
+        axis=1
+    )
+
+    result = df[mask]
+
+    if result.empty:
+        sys.stderr.write(f"DEBUG: No matching records found for '{search_string}'.\n")
+        return f"❌ No records found matching '{search_string}'."
+
+    sys.stderr.write(f"DEBUG: Found {len(result)} matching records\n")
+    
+    # Select relevant columns for display
+    display_cols = result[['hostname', 'qmgr', 'object_type']].copy()
+    
+    # Remove exact duplicates
+    display_cols = display_cols.drop_duplicates()
+    sys.stderr.write(f"DEBUG: After removing duplicates: {len(display_cols)} unique records\n")
+    
+    # Format output as readable text with descriptive header
+    output_lines = []
+    output_lines.append(f"SEARCH RESULTS FOR: {search_string}")
+    output_lines.append("=" * 100)
+    
+    for idx, row in display_cols.iterrows():
+        hostname = str(row['hostname']).strip()
+        qmgr = str(row['qmgr']).strip()
+        obj_type = str(row['object_type']).strip()
+        formatted_line = f"Queue Manager: {qmgr} | Hostname: {hostname} | Type: {obj_type}"
+        output_lines.append(formatted_line)
+        sys.stderr.write(f"DEBUG: Result line: {formatted_line}\n")
+    
+    output_lines.append("=" * 100)
+    output_lines.append(f"SUMMARY: Found '{search_string}' on queue manager(s): {', '.join(display_cols['qmgr'].unique())}")
+    
+    result_text = "\n".join(output_lines)
+    sys.stderr.write(f"DEBUG: Final output:\n{result_text}\n")
+    return result_text
+
+
+# ----------------------------
+# TOOL — COLUMN SEARCH
+# ----------------------------
+
+@mcp.tool()
+def search_by_column(column: str, value: str) -> str:
+    """
+    Search specific column for a value.
+    Example: search by queue manager name (QM1) or queue name (SYSTEM.DEFAULT.LOCAL.QUEUE)
+    Returns formatted string with matching records.
+    """
+
+    sys.stderr.write(f"DEBUG: search_by_column called with column='{column}', value='{value}'\n")
+
+    df = load_csv()
+
+    if df.empty:
+        sys.stderr.write("DEBUG: CSV is empty.\n")
+        return "CSV file is empty."
+
+    # Check if column exists in dataframe
+    if column not in df.columns:
+        available_cols = ", ".join(df.columns)
+        sys.stderr.write(f"DEBUG: Column '{column}' not found. Available columns: {available_cols}\n")
+        return f"Column '{column}' not found. Available columns: {available_cols}"
+
+    # Search for value in the specified column (case-insensitive)
+    result = df[
+        df[column].astype(str)
+        .str.contains(value, case=False, na=False)
+    ]
+
+    if result.empty:
+        sys.stderr.write(f"DEBUG: No records found where {column} contains '{value}'.\n")
+        return f"No records found where {column} contains '{value}'."
+
+    sys.stderr.write(f"DEBUG: Found {len(result)} matching records in column '{column}'\n")
+    
+    # Format output as readable text with pipe delimiters
+    output_lines = []
+    output_lines.append(f"Found {len(result)} record(s) where {column} contains '{value}':\n")
+    output_lines.append("=" * 100)
+    
+    for idx, row in result.iterrows():
+        output_lines.append(" | ".join(str(val).strip() for val in row.values))
+        output_lines.append("-" * 100)
+    
+    return "\n".join(output_lines)
+
 
 @mcp.tool()
 async def dspmq() -> str:
@@ -177,15 +347,7 @@ async def verify_connectivity():
             sys.stderr.write(f"   Error: {str(e)}\n\n")
 
 if __name__ == "__main__":
-    # Perform pre-flight connectivity check
-    try:
-        asyncio.run(verify_connectivity())
-    except Exception as e:
-        sys.stderr.write(f"DEBUG: Connectivity check skipped or failed: {e}\n")
-
-    # Initialize and run the server on http://127.0.0.1:8000/mcp
-    #mcp.run(transport='streamable-http')
-    # If using IBM Bob then use one of these
+    # Initialize and run the server
+    # Stdio mode is used for direct client integration (test_mcp_client, llm_client, streamlit_openai_client)
+    sys.stderr.write("DEBUG: Starting MCP Server in stdio mode\n")
     mcp.run(transport='stdio')
-    # URL is http://127.0.0.1:8000/sse
-    #mcp.run(transport='sse')

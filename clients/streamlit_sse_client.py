@@ -1,8 +1,6 @@
 import streamlit as st
 import asyncio
-import os
-import json
-import sys
+import requests
 from mcp import ClientSession
 from mcp.client.sse import sse_client
 from dotenv import load_dotenv
@@ -96,11 +94,11 @@ async def check_connection(server_url):
     """Check if we can connect to the SSE endpoint"""
     try:
         # Just try to initialize a session to verify connection
-         async with sse_client(server_url) as streams:
+        async with sse_client(server_url) as streams:
             async with ClientSession(streams[0], streams[1]) as session:
                 await session.initialize()
                 return True
-    except:
+    except Exception:
         return False
 
 # CUSTOM CSS
@@ -226,3 +224,20 @@ if choice and choice != "Select an operation...":
                 else:
                     st.success("Command Executed Successfully")
                     st.code(result, language="text")
+
+# Add a new section to display qmgr_dump.csv data
+st.sidebar.header("Queue Manager Data")
+if st.sidebar.button("Load Queue Manager Data"):
+    try:
+        response = requests.get("http://127.0.0.1:8001/qmgr_dump")
+        if response.status_code == 200:
+            data = response.json().get("result", [])
+            if data:
+                st.write("### Queue Manager Data")
+                st.dataframe(data)
+            else:
+                st.warning("No data found in qmgr_dump.csv.")
+        else:
+            st.error(f"Failed to load data: {response.status_code}")
+    except Exception as e:
+        st.error(f"Error: {str(e)}")
