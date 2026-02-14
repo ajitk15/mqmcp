@@ -87,10 +87,6 @@ mcp_port = int(os.getenv("MQ_MCP_PORT", 8000))
 mcp = FastMCP("mqmcpserver", host=mcp_host, port=mcp_port)
 
 
-# ----------------------------
-# RESOURCE
-# ----------------------------
-
 @mcp.resource("qmgr://dump")
 def get_qmgr_dump() -> list:
     """
@@ -103,10 +99,6 @@ def get_qmgr_dump() -> list:
 
     return df.to_dict(orient="records")
 
-
-# ----------------------------
-# TOOL — SEARCH
-# ----------------------------
 
 @mcp.tool()
 def search_qmgr_dump(search_string: str) -> str:

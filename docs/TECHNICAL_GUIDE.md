@@ -174,6 +174,51 @@ The following metrics are automatically captured for every tool call:
 
 ---
 
+## 🔒 Security Configuration (Production Readiness)
+
+For production deployments, the MCP endpoint must be secured using SSL/TLS and Authentication. Since `FastMCP`'s standard run method is simplified, these features require specific implementation patterns.
+
+### 1. Enable SSL/TLS (HTTPS)
+To serve traffic securely, you must bypass the standard `mcp.run()` and use `uvicorn` directly with your certificate files.
+
+**Implementation Pattern (`server/mqmcpserver.py`):**
+```python
+if transport == "sse":
+    import uvicorn
+    # Get the underlying Starlette app
+    app = mcp.sse_app()
+    
+    # Run with SSL
+    uvicorn.run(
+        app,
+        host=mcp_host,
+        port=mcp_port,
+        ssl_keyfile=os.getenv("MQ_MCP_SSL_KEY"),  # e.g., "key.pem"
+        ssl_certfile=os.getenv("MQ_MCP_SSL_CERT") # e.g., "cert.pem"
+    )
+```
+
+### 2. API Key Authentication
+The simplest security layer is a middleware that enforces an `X-API-Key` header.
+
+**Implementation Pattern (`server/mqmcpserver.py`):**
+```python
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
+
+class AuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        api_key = os.getenv("MQ_MCP_API_KEY")
+        if api_key and request.headers.get("X-API-Key") != api_key:
+            return Response("Unauthorized", status_code=401)
+        return await call_next(request)
+
+# Add to app before running
+app.add_middleware(AuthMiddleware)
+```
+
+---
+
 ## 🚀 Use Cases
 
 1.  **DevOps Monitoring**: Quickly check queue health without logging into the MQ Explorer.
