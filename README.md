@@ -8,8 +8,9 @@ A powerful and user-friendly **Model Context Protocol (MCP)** server for IBM MQ,
 
 *   🔍 **Infrastructure Discovery**: Instantly list all queue managers and their statuses.
 *   📊 **Deep Monitoring**: Check queue depths, message status, and channel health with natural language.
+*   🧠 **Smart Workflows**: Automatically locates queues across any Queue Manager (including Clusters) without needing explicit targeting.
 *   🛡️ **Installation Auditing**: Retrieve detailed MQ version, build, and installation path info.
-*   🧠 **Multiple Interfaces**: Choose between Pattern-based (Basic), AI-powered (OpenAI/Anthropic), or Guided (One-click) interfaces.
+*   🤖 **Multiple Interfaces**: Choose between Pattern-based (Basic), AI-powered (OpenAI/Anthropic), Guided (One-click), or SSE (Real-time).
 *   🌐 **Universal REST Support**: Fully integrated with the IBM MQ REST API (mqweb), supporting both Distributed and z/OS managers.
 
 ---
@@ -34,9 +35,11 @@ mq/
 │   ├── streamlit_guided_client.py  # 🧭 Guided Assistant (Recommended)
 │   ├── streamlit_basic_client.py   # 🤖 Pattern-based Web UI
 │   ├── streamlit_openai_client.py # 🧠 AI Assistant (LLM-powered)
+│   ├── streamlit_sse_client.py     # ⚡ SSE Client (Real-time)
 │   ├── dynamic_client.py           # 📜 Pattern Detection Library
 │   ├── llm_client.py               # 🔗 LLM Integration Library
 │   └── test_mcp_client.py          # 🧪 Developer CLI Menu
+├── run_all_assistants.bat          # 🚀 Unified Launch Script
 ├── .env                            # 🔐 Secrets & Configuration
 └── requirements.txt                # 📦 Dependencies
 ```
@@ -81,8 +84,10 @@ Choose your preferred flavor of the assistant:
 
 | Assistant | Command | Best For... |
 | :--- | :--- | :--- |
+| **Unified Launch** | `.\run_all_assistants.bat` | **Launches ALL clients simultaneously.** |
 | **Guided Assistant** | `streamlit run clients/streamlit_guided_client.py` | One-click ops & guided troubleshooting. |
-| **AI Assistant** | `streamlit run clients/streamlit_openai_client.py` | Natural conversations & complex queries. |
+| **AI Assistant** | `streamlit run clients/streamlit_openai_client.py` | Natural conversations, Cluster support. |
+| **SSE Assistant** | `scripts/run_streamlit_sse.bat` | Real-time events & Smart Workflows. |
 | **Basic Assistant** | `streamlit run clients/streamlit_basic_client.py` | Fast, deterministic pattern matching. |
 | **CLI Tester** | `python clients/test_mcp_client.py` | Developers testing tool responses. |
 

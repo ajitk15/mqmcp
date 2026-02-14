@@ -20,6 +20,8 @@ from typing import Dict, List, Optional, Tuple
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from dotenv import load_dotenv
+import atexit
+import signal
 try:
     from metrics_logger import get_metrics_logger, MetricsTracker
 except ImportError:
@@ -45,6 +47,11 @@ class DynamicMQClient:
             server_script = os.path.join(script_dir, "..", "server", "mqmcpserver.py")
         self.server_script = server_script
         self.session = None
+        self._process = None
+        self._cleanup_done = False
+        
+        # Register cleanup
+        atexit.register(self.cleanup)
         
         # Define patterns for intent detection
         self.intent_patterns = {
@@ -106,6 +113,13 @@ class DynamicMQClient:
                 r'show\s*version',
                 r'mq\s*version',
             ],
+            'search_resource': [
+                r'where\s*is\s+(?:queue|channel)?\s*([\w\.]+)',
+                r'find\s+(?:queue|channel)?\s*([\w\.]+)',
+                r'search\s*for\s*([\w\.]+)',
+                r'locate\s*([\w\.]+)',
+                r'which\s*qmgr\s*has\s*([\w\.]+)',
+            ],
         }
         
     async def connect(self):
@@ -120,18 +134,58 @@ class DynamicMQClient:
         self.client_context = stdio_client(server_params)
         read, write = await self.client_context.__aenter__()
         
+        # Store process handle for cleanup
+        if hasattr(self.client_context, '_process'):
+            self._process = self.client_context._process
+        
         self.session_context = ClientSession(read, write)
         self.session = await self.session_context.__aenter__()
         
         await self.session.initialize()
-        print("[CONN] Connected to MCP server\n")
+        print(f"[CONN] Connected to MCP server endpoint: {self.server_script}\n")
         
     async def disconnect(self):
         """Disconnect from the MCP server"""
-        if self.session_context:
-            await self.session_context.__aexit__(None, None, None)
-        if self.client_context:
-            await self.client_context.__aexit__(None, None, None)
+        try:
+            if self.session_context:
+                await self.session_context.__aexit__(None, None, None)
+        except: pass
+            
+        try:
+            if self.client_context:
+                await self.client_context.__aexit__(None, None, None)
+        except: pass
+
+    def cleanup(self):
+        """Force cleanup of resources"""
+        if self._cleanup_done:
+            return
+            
+        # Try graceful disconnect
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.create_task(self.disconnect())
+            else:
+                loop.run_until_complete(self.disconnect())
+        except: pass
+        
+        # Force terminate subprocess
+        if self._process and hasattr(self._process, 'poll'):
+            try:
+                if self._process.poll() is None:
+                    self._process.terminate()
+                    try:
+                        self._process.wait(timeout=3)
+                    except:
+                        self._process.kill()
+                        self._process.wait()
+            except: pass
+            
+        self._cleanup_done = True
+
+    def __del__(self):
+        self.cleanup()
             
     def detect_intent(self, user_input: str) -> Tuple[str, Optional[Dict]]:
         """
@@ -194,6 +248,10 @@ class DynamicMQClient:
         # Extract queue manager if needed
         qmgr = self.extract_queue_manager(user_input)
         
+        # FIX: If extracted QMGR is same as the entity (queue/channel/etc), it's likely a false positive.
+        if params and qmgr and qmgr == params.get('entity'):
+            qmgr = None
+        
         # Route to appropriate handler
         if intent == 'list_qmgrs':
             return await self._handle_list_qmgrs()
@@ -220,13 +278,22 @@ class DynamicMQClient:
         elif intent == 'check_version':
             return await self._handle_check_version()
             
+        elif intent == 'search_resource':
+            query = params.get('entity', 'UNKNOWN')
+            return await self._handle_search(query, user_input)
+            
         else:
             return "I'm not sure how to help with that. Try asking to list queue managers or check a queue depth."
+
+    def _log_tool_call(self, tool_name: str, args: dict):
+        """Log tool call details"""
+        print(f"    [ENDPOINT] Calling tool: {tool_name}")
+        print(f"    [ARGS] {args}")
             
     async def _handle_list_qmgrs(self) -> str:
         """Handle listing queue managers"""
         print("    Detected intent: List Queue Managers")
-        print("    Calling tool: dspmq")
+        self._log_tool_call("dspmq", {})
         
         try:
             with MetricsTracker(logger, "dspmq", {"interface": "dynamic_client"}):
@@ -238,7 +305,7 @@ class DynamicMQClient:
     async def _handle_check_version(self) -> str:
         """Handle checking version"""
         print("    Detected intent: Check Version")
-        print("    Calling tool: dspmqver")
+        self._log_tool_call("dspmqver", {})
         
         try:
             with MetricsTracker(logger, "dspmqver", {"interface": "dynamic_client"}):
@@ -248,20 +315,60 @@ class DynamicMQClient:
             return f"Error: {e}"
             
     async def _handle_check_queue_depth(self, qmgr: Optional[str], queue_name: str, user_input: str) -> str:
-        """Handle checking queue depth"""
+        """Handle checking queue depth (with auto-discovery)"""
         print(f"    Detected intent: Check Queue Depth")
         print(f"   Queue: {queue_name}")
         
-        # If queue manager not detected, ask for it
+        # If queue manager not detected, try to find it
         if not qmgr:
-            return "I need to know which queue manager to check. Please specify it (e.g., 'Check depth of MYQUEUE on QM1')"
+            print(f"   QMGR not specified. Searching for {queue_name}...")
+            try:
+                # Search for the queue
+                self._log_tool_call("search_qmgr_dump", {"search_string": queue_name})
+                search_res = await self.session.call_tool("search_qmgr_dump", {
+                    "search_string": queue_name
+                })
+                search_text = search_res.content[0].text
+                
+                # Parse QMGRs (Simple parsing of the text output)
+                import re
+                qmgrs = set()
+                for line in search_text.split('\n'):
+                    # Match "Queue Manager: QM1 | ..."
+                    match = re.search(r'Queue Manager:\s*([A-Z0-9_\.]+)', line, re.IGNORECASE)
+                    if match:
+                        qmgrs.add(match.group(1).strip())
+                
+                if not qmgrs:
+                    return f"I couldn't find a queue named '{queue_name}' on any known queue manager. Please specify the queue manager if it exists."
+                
+                print(f"   Found on: {', '.join(qmgrs)}")
+                
+                # Check depth on all found QMGRs
+                results = []
+                for qm in qmgrs:
+                    mqsc_command = f"DISPLAY QLOCAL({queue_name}) CURDEPTH"
+                    self._log_tool_call("runmqsc", {"qmgr_name": qm, "mqsc_command": mqsc_command})
+                    with MetricsTracker(logger, "runmqsc", {"qmgr": qm, "cmd": mqsc_command}):
+                        res = await self.session.call_tool("runmqsc", {
+                            "qmgr_name": qm,
+                            "mqsc_command": mqsc_command
+                        })
+                        # Extract just the result part to keep it clean
+                        output = res.content[0].text
+                        results.append(f"**[{qm}]**\n{output}")
+                
+                return f"Found '{queue_name}' on {len(qmgrs)} Queue Manager(s):\n\n" + "\n\n".join(results)
+                
+            except Exception as e:
+                return f"Error searching for queue: {str(e)}"
             
         print(f"   Queue Manager: {qmgr}")
-        print(f"    Calling tool: runmqsc")
         
         mqsc_command = f"DISPLAY QLOCAL({queue_name}) CURDEPTH"
         
         try:
+            self._log_tool_call("runmqsc", {"qmgr_name": qmgr, "mqsc_command": mqsc_command})
             with MetricsTracker(logger, "runmqsc", {"qmgr": qmgr, "cmd": mqsc_command}):
                 result = await self.session.call_tool("runmqsc", {
                     "qmgr_name": qmgr,
@@ -279,11 +386,11 @@ class DynamicMQClient:
             return "Please specify the queue manager (e.g., 'List all queues on QM1')"
             
         print(f"   Queue Manager: {qmgr}")
-        print(f"    Calling tool: runmqsc")
         
         mqsc_command = "DISPLAY QLOCAL(*)"
         
         try:
+            self._log_tool_call("runmqsc", {"qmgr_name": qmgr, "mqsc_command": mqsc_command})
             with MetricsTracker(logger, "runmqsc", {"qmgr": qmgr, "cmd": mqsc_command}):
                 result = await self.session.call_tool("runmqsc", {
                     "qmgr_name": qmgr,
@@ -301,11 +408,11 @@ class DynamicMQClient:
             return "Please specify the queue manager (e.g., 'Show channels on QM1')"
             
         print(f"   Queue Manager: {qmgr}")
-        print(f"    Calling tool: runmqsc")
         
         mqsc_command = "DISPLAY CHANNEL(*)"
         
         try:
+            self._log_tool_call("runmqsc", {"qmgr_name": qmgr, "mqsc_command": mqsc_command})
             with MetricsTracker(logger, "runmqsc", {"qmgr": qmgr, "cmd": mqsc_command}):
                 result = await self.session.call_tool("runmqsc", {
                     "qmgr_name": qmgr,
@@ -324,11 +431,11 @@ class DynamicMQClient:
             return "Please specify the queue manager (e.g., 'Status of MYQUEUE on QM1')"
             
         print(f"   Queue Manager: {qmgr}")
-        print(f"    Calling tool: runmqsc")
         
         mqsc_command = f"DISPLAY QSTATUS({queue_name})"
         
         try:
+            self._log_tool_call("runmqsc", {"qmgr_name": qmgr, "mqsc_command": mqsc_command})
             with MetricsTracker(logger, "runmqsc", {"qmgr": qmgr, "cmd": mqsc_command, "queue": queue_name}):
                 result = await self.session.call_tool("runmqsc", {
                     "qmgr_name": qmgr,
@@ -346,10 +453,10 @@ class DynamicMQClient:
             return "Please specify the queue manager (e.g., 'Status of channel TO.QM2 on QM1')"
         
         print(f"   Queue Manager: {qmgr}")
-        print(f"    Calling tool: runmqsc")
         
         mqsc_command = f"DISPLAY CHSTATUS({channel_name})"
         try:
+            self._log_tool_call("runmqsc", {"qmgr_name": qmgr, "mqsc_command": mqsc_command})
             with MetricsTracker(logger, "runmqsc", {"qmgr": qmgr, "cmd": mqsc_command, "channel": channel_name}):
                 result = await self.session.call_tool("runmqsc", {
                     "qmgr_name": qmgr,
@@ -366,10 +473,10 @@ class DynamicMQClient:
             return "Please specify the queue manager (e.g., 'Show listeners on QM1')"
             
         print(f"   Queue Manager: {qmgr}")
-        print(f"    Calling tool: runmqsc")
         
         mqsc_command = "DISPLAY LSSTATUS(*)"
         try:
+            self._log_tool_call("runmqsc", {"qmgr_name": qmgr, "mqsc_command": mqsc_command})
             with MetricsTracker(logger, "runmqsc", {"qmgr": qmgr, "cmd": mqsc_command}):
                 result = await self.session.call_tool("runmqsc", {
                     "qmgr_name": qmgr,
@@ -386,16 +493,32 @@ class DynamicMQClient:
             return "Please specify the queue manager (e.g., 'Show qmgr info for QM1')"
             
         print(f"   Queue Manager: {qmgr}")
-        print(f"    Calling tool: runmqsc")
         
         mqsc_command = "DISPLAY QMGR"
         try:
+            self._log_tool_call("runmqsc", {"qmgr_name": qmgr, "mqsc_command": mqsc_command})
             with MetricsTracker(logger, "runmqsc", {"qmgr": qmgr, "cmd": mqsc_command}):
                 result = await self.session.call_tool("runmqsc", {
                     "qmgr_name": qmgr,
                     "mqsc_command": mqsc_command
                 })
             return f"**Tool:** `runmqsc`\n**Command:** `runmqsc` ({qmgr}) -> `{mqsc_command}`\n\n**Result:**\n{result.content[0].text}"
+        except Exception as e:
+            return f"Error: {e}"
+            
+    async def _handle_search(self, query: str, user_input: str) -> str:
+        """Handle searching for resources (queues/channels)"""
+        print(f"    Detected intent: Search Resource")
+        print(f"    Query: {query}")
+        
+        try:
+            with MetricsTracker(logger, "search_qmgr_dump", {"query": query}):
+                # Try generic search first
+                self._log_tool_call("search_qmgr_dump", {"search_string": query})
+                result = await self.session.call_tool("search_qmgr_dump", {
+                    "search_string": query
+                })
+            return f"**Tool:** `search_qmgr_dump`\n**Query:** `{query}`\n\n**Result:**\n{result.content[0].text}"
         except Exception as e:
             return f"Error: {e}"
             

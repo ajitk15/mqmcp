@@ -24,6 +24,10 @@ User Input → Client (Guided/AI/Basic) → MCP Protocol (stdio)
 *   **`dynamic_client.py`**: The "Router". Provides regex-based intent detection.
 *   **`llm_client.py`**: The "Intelligence". Integrates with OpenAI/Anthropic for natural language tool selection.
 
+### Server Execution
+*   **Dynamic Clients (Basic/Guided/AI)**: Automatically launch their own private server instance.
+*   **SSE Client**: Requires a standalone server. You must start it manually using `scripts/run_mq_api.bat` (Option 1).
+
 ---
 
 ## 🔍 Dynamic Intent Detection
@@ -42,6 +46,22 @@ Used in the **AI Assistant**. It uses models like GPT-4 or Claude 3.5 Sonnet to 
 
 ### 3. Hybrid Strategy (Recommended)
 The **Guided Assistant** combines specific task definitions with the dynamic client to provide a reliable "one-click" experience while still supporting natural language commands.
+
+---
+
+## 🧠 Smart Workflows (Auto-Locate)
+
+The ecosystem implements "Smart Queue" logic to simplify user interaction.
+
+### The Problem
+Traditionally, MQ admins must know *exactly* which Queue Manager hosts a queue before querying it (e.g., `DISPLAY QLOCAL(Q1)` needs a target QMGR).
+
+### The Solution
+Our clients (Dynamic, SSE, & AI) automatically solve this using a multi-step workflow:
+1.  **Search**: When a user asks about a queue (e.g., "Check Q1"), the system first calls `search_qmgr_dump` to find it globally.
+2.  **Identify**: It parses the results to find **ALL** Queue Managers hosting that queue (supports Multi-Instance and Clusters).
+3.  **Execute**: It runs the requested command (Depth/Status) against *every* found Queue Manager using `runmqsc`.
+4.  **Cluster Aware**: The AI client specifically checks for `CLUSTER` attributes and lists the hosting Queue Managers for you.
 
 ---
 
@@ -98,9 +118,15 @@ The MCP server communicates with MQ via the REST interface. You must ensure this
 
 ## 📊 Metrics & Logging (Splunk Compatible)
 
+### Console Output (Transparency)
+The `dynamic_client.py` provides transparent logging to `stdout` so you can see exactly what the assistant is doing:
+*   **Endpoint**: Shows the full path to the MCP server script being executed.
+*   **Tools**: Displays the exact Tool Name and Arguments (including raw MQSC commands) for every operation.
+
+### Metrics Logger
 The ecosystem includes a dedicated **Metrics Logger** (`clients/metrics_logger.py`) that generates structured JSON logs specifically formatted for **Splunk** ingestion.
 
-### How it works
+#### How it works
 The logger is placed on the **Client side** (e.g., in `DynamicMQClient`). This allows us to capture end-to-end metrics without modifying the core MCP server code.
 
 1.  **Structured JSON**: Logs are output to `sys.stderr` as single-line JSON objects.
@@ -142,6 +168,18 @@ The following metrics are automatically captured for every tool call:
 2.  **Incident Response**: Use the AI assistant to search for issues across multiple queue managers.
 3.  **Audit & Compliance**: Retrieve installation details and versions using `dspmqver` with a single click.
 4.  **Self-Service**: Allow non-MQ experts to perform basic queries using natural language.
+
+---
+
+## 🚀 Speed Launch
+
+You can launch **ALL** assistants simultaneously using the provided batch script:
+
+```powershell
+.\run_all_assistants.bat
+```
+
+This will open 4 separate terminal windows, one for each client (Basic, Guided, AI, SSE), each on its own port.
 
 ---
 

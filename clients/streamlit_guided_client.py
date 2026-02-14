@@ -154,9 +154,9 @@ QUESTIONS = {
         "description": "Get a list of all local queues defined on the queue manager."
     },
     "Check Queue Depth": {
-        "prompt": "what is the depth of {queue} on {qmgr}",
-        "inputs": ["qmgr", "queue"],
-        "description": "Check current number of messages (CURDEPTH) on a queue."
+        "prompt": "what is the depth of {queue}",
+        "inputs": ["queue"],
+        "description": "Auto-locate queue and check current number of messages (CURDEPTH)."
     },
     "Check Queue Status": {
         "prompt": "status of queue {queue} on {qmgr}",
@@ -178,6 +178,12 @@ QUESTIONS = {
         "prompt": "show listeners on {qmgr}",
         "inputs": ["qmgr"],
         "description": "Check the status of listeners (TCP/IP ports)."
+    },
+    "--- Discovery ---": {"header": True, "icon": "🔍"},
+    "Find a Queue/Channel": {
+        "prompt": "where is {name}",
+        "inputs": ["name"],
+        "description": "Search across all Queue Managers to find where a Queue or Channel exists."
     }
 }
 

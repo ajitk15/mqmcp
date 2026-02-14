@@ -234,7 +234,7 @@ if "llm_client" not in st.session_state:
 # Chat interface initialization
 if "messages_llm" not in st.session_state:
     st.session_state.messages_llm = [
-        {"role": "assistant", "content": "I'm your AI-powered IBM MQ assistant. How can I help you today? (e.g., 'Check if all queue managers are running')\n\n**💡 Tip:** I can maintain conversation context, so you can ask follow-up questions and I'll remember the context!"}
+        {"role": "assistant", "content": "I'm your AI-powered IBM MQ assistant. How can I help you today? (e.g., 'Check status of queue Q1')\n\n**💡 Tip:** I can maintain conversation context, so you can ask follow-up questions and I'll remember the context!"}
     ]
 
 # Display connection status

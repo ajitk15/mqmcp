@@ -364,7 +364,14 @@ MANDATORY RULES - YOU MUST FOLLOW THESE:
    - Local (QL*): DISPLAY QLOCAL(<QUEUE_NAME>) CURDEPTH
    - Remote (QR*): DISPLAY QREMOTE(<QUEUE_NAME>) CURDEPTH
    - Alias (QA*): DISPLAY QALIAS(<QUEUE_NAME>) to see TARGET
-8. COMPLETE THE WORKFLOW - user asks question → search → identify ALL QMs → runmqsc on EACH → return answer
+8. Queue Status:
+   - Command: DISPLAY QSTATUS(<QUEUE_NAME>) TYPE(QUEUE) ALL
+   - Purpose: Check Open Input/Output Count (IPPROCS/OPPROCS)
+9. Cluster Queues:
+   - Command: DISPLAY QLOCAL(<QUEUE_NAME>) CLUSTER
+   - If CLUSTER attribute is NOT empty, it is a cluster queue.
+   - List ALL Queue Managers found in the initial 'search_qmgr_dump' step as hosting this cluster queue.
+10. COMPLETE THE WORKFLOW - user asks question → search → identify ALL QMs → runmqsc on EACH → return answer
 
 YOU MUST NOT:
 - Ask "which queue manager?" when search already found it
@@ -524,7 +531,14 @@ MANDATORY RULES - YOU MUST FOLLOW THESE:
    - Local (QL*): DISPLAY QLOCAL(<QUEUE_NAME>) CURDEPTH
    - Remote (QR*): DISPLAY QREMOTE(<QUEUE_NAME>) CURDEPTH
    - Alias (QA*): DISPLAY QALIAS(<QUEUE_NAME>) to see TARGET
-8. COMPLETE THE WORKFLOW - user asks question → search → identify ALL QMs → runmqsc on EACH → return answer
+8. Queue Status:
+   - Command: DISPLAY QSTATUS(<QUEUE_NAME>) TYPE(QUEUE) ALL
+   - Purpose: Check Open Input/Output Count (IPPROCS/OPPROCS)
+9. Cluster Queues:
+   - Command: DISPLAY QLOCAL(<QUEUE_NAME>) CLUSTER
+   - If CLUSTER attribute is NOT empty, it is a cluster queue.
+   - List ALL Queue Managers found in the initial 'search_qmgr_dump' step as hosting this cluster queue.
+10. COMPLETE THE WORKFLOW - user asks question → search → identify ALL QMs → runmqsc on EACH → return answer
 
 YOU MUST NOT:
 - Ask "which queue manager?" when search already found it

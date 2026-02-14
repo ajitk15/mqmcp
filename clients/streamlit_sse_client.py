@@ -6,7 +6,30 @@ from mcp.client.sse import sse_client
 from dotenv import load_dotenv
 
 # Load environment variables
+# Load environment variables
 load_dotenv()
+
+# Cleanup handler for graceful shutdown
+def cleanup_on_exit():
+    """Cleanup resources on exit - non-blocking"""
+    import threading
+    
+    def do_cleanup():
+        try:
+            if hasattr(st, 'session_state'):
+                for key in list(st.session_state.keys()):
+                    # Clear session state objects if needed
+                    pass
+        except:
+            pass
+    
+    # Run cleanup in background thread (daemon)
+    t = threading.Thread(target=do_cleanup, daemon=True)
+    t.start()
+    t.join(timeout=1)
+
+import atexit
+atexit.register(cleanup_on_exit)
 
 # Set up page config
 st.set_page_config(page_title="IBM MQ MCP Client (SSE)", page_icon="⚡", layout="wide")
@@ -45,16 +68,16 @@ OPERATIONS = {
         "description": "Get a list of all local queues defined on the queue manager."
     },
     "Check Queue Depth": {
-        "tool": "runmqsc",
-        "args": {"qmgr_name": "Queue Manager Name", "queue_name": "Queue Name"},
-        "mqsc_template": "DISPLAY QLOCAL({queue_name}) CURDEPTH",
-        "description": "Check current number of messages (CURDEPTH) on a queue."
+        "smart_workflow": "check_depth",
+        "tool": "runmqsc", # Placeholder, logic handled in smart_workflow
+        "args": {"queue_name": "Queue Name"},
+        "description": "Auto-locate queue and check current number of messages (CURDEPTH)."
     },
     "Check Queue Status": {
+        "smart_workflow": "check_status",
         "tool": "runmqsc",
-        "args": {"qmgr_name": "Queue Manager Name", "queue_name": "Queue Name"},
-        "mqsc_template": "DISPLAY QSTATUS({queue_name})",
-        "description": "Check open input/output counts and status."
+        "args": {"queue_name": "Queue Name"},
+        "description": "Auto-locate queue and check open input/output counts (QSTATUS)."
     },
     "--- Channels & Listeners ---": {"header": True},
     "Show Channels": {
@@ -74,6 +97,12 @@ OPERATIONS = {
         "tool": "runmqsc",
         "args": {"qmgr_name": "Queue Manager Name", "mqsc_command": "MQSC Command"},
         "description": "Execute a raw MQSC command against a queue manager."
+    },
+    "--- Discovery ---": {"header": True},
+    "Find a Queue/Channel": {
+        "tool": "search_qmgr_dump",
+        "args": {"search_string": "Search Query (e.g. queue name)"},
+        "description": "Search across all Queue Managers to find where a Queue or Channel exists."
     }
 }
 
@@ -88,6 +117,12 @@ async def call_mcp_tool(server_url, tool_name, arguments):
                     return result.content[0].text
                 return "✅ Command executed (No output)"
     except Exception as e:
+        # Handle ExceptionGroups (TaskGroup errors)
+        if hasattr(e, 'exceptions'):
+            error_msgs = []
+            for ex in e.exceptions:
+                error_msgs.append(str(ex))
+            return f"❌ Error: {'; '.join(error_msgs)}"
         return f"❌ Error: {str(e)}"
 
 async def check_connection(server_url):
@@ -98,8 +133,20 @@ async def check_connection(server_url):
             async with ClientSession(streams[0], streams[1]) as session:
                 await session.initialize()
                 return True
-    except Exception:
+    except Exception as e:
+        print(f"Connection check failed: {e}")
         return False
+
+def extract_qmgrs_from_search(search_output: str) -> list:
+    """Parse search_qmgr_dump output to find queue manager names"""
+    import re
+    # Look for lines like "Queue Manager: QM1 | ..."
+    qmgrs = set()
+    for line in search_output.split('\n'):
+        match = re.search(r'Queue Manager:\s*([A-Z0-9_\.]+)', line, re.IGNORECASE)
+        if match:
+            qmgrs.add(match.group(1).strip())
+    return list(qmgrs)
 
 # CUSTOM CSS
 st.markdown("""
@@ -214,9 +261,47 @@ if choice and choice != "Select an operation...":
                 except KeyError as e:
                     st.error(f"Template error: Missing {e}")
                     st.stop()
+            
+            # --- Smart Workflow Execution ---
+            if "smart_workflow" in op_config:
+                workflow_type = op_config["smart_workflow"]
+                
+                if workflow_type in ["check_depth", "check_status"]:
+                    queue_name = tool_args.get("queue_name")
+                    command_template = "DISPLAY QLOCAL({queue}) CURDEPTH" if workflow_type == "check_depth" else "DISPLAY QSTATUS({queue}) TYPE(QUEUE) ALL"
+                    
+                    with st.spinner(f"🔍 Searching for {queue_name}..."):
+                        # Step 1: Search
+                        st.info(f"**Tool:** `search_qmgr_dump` | **Args:** `{{'search_string': '{queue_name}'}}`")
+                        search_res = asyncio.run(call_mcp_tool(st.session_state.server_url, "search_qmgr_dump", {"search_string": queue_name}))
+                        
+                        # Step 2: Parse QMGRs
+                        qmgrs = extract_qmgrs_from_search(search_res)
+                        
+                        if not qmgrs:
+                            st.warning(f"Could not find queue '{queue_name}' on any known queue manager.")
+                            st.text(search_res) # Show search output for debugging
+                        else:
+                            st.success(f"Found on {len(qmgrs)} Queue Manager(s): {', '.join(qmgrs)}")
+                            
+                            # Step 3: Check Depth/Status on each
+                            for qmgr in qmgrs:
+                                with st.status(f"Checking {qmgr}...", expanded=True):
+                                    cmd = command_template.format(queue=queue_name)
+                                    st.write(f"**Tool:** `runmqsc`")
+                                    st.code(f"MQSC: {cmd}", language="properties")
+                                    res = asyncio.run(call_mcp_tool(st.session_state.server_url, "runmqsc", {
+                                        "qmgr_name": qmgr,
+                                        "mqsc_command": cmd
+                                    }))
+                                    st.code(res, language="text")
+                st.stop() # End execution after smart workflow
+
+            # Execute standard tool
 
             # Execute
             with st.spinner(f"Running {op_config['tool']}..."):
+                st.info(f"**Tool:** `{op_config['tool']}`\n\n**Args:** `{final_args}`")
                 result = asyncio.run(call_mcp_tool(st.session_state.server_url, op_config["tool"], final_args))
                 
                 if "❌ Error" in result:
