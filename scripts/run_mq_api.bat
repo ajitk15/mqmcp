@@ -12,7 +12,9 @@ echo.
 set /p choice="Enter choice (1 or 2): "
 
 if "%choice%"=="1" (
-    python mqmcpserver_sse.py
+    echo Starting MCP Server (SSE Mode)...
+    set MQ_MCP_TRANSPORT=sse
+    python ..\server\mqmcpserver.py
 ) else if "%choice%"=="2" (
     python api_wrapper.py
 ) else (

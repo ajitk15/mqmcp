@@ -79,8 +79,12 @@ sys.stderr.write(f"DEBUG: Target MQ User: {USER_NAME}\n")
 if not URL_BASE or not USER_NAME:
     sys.stderr.write("❌ CRITICAL ERROR: MQ_URL_BASE or MQ_USER_NAME is not set in .env\n")
 
-# Initialize FastMCP server (for stdio mode, no port needed)
-mcp = FastMCP("mqmcpserver")
+# Initialize FastMCP server
+# Use MQ_MCP_HOST/PORT if set (useful if running in SSE mode via import)
+mcp_host = os.getenv("MQ_MCP_HOST", "0.0.0.0")
+mcp_port = int(os.getenv("MQ_MCP_PORT", 8000))
+
+mcp = FastMCP("mqmcpserver", host=mcp_host, port=mcp_port)
 
 
 # ----------------------------
@@ -166,56 +170,6 @@ def search_qmgr_dump(search_string: str) -> str:
     result_text = "\n".join(output_lines)
     sys.stderr.write(f"DEBUG: Final output:\n{result_text}\n")
     return result_text
-
-
-# ----------------------------
-# TOOL — COLUMN SEARCH
-# ----------------------------
-
-@mcp.tool()
-def search_by_column(column: str, value: str) -> str:
-    """
-    Search specific column for a value.
-    Example: search by queue manager name (QM1) or queue name (SYSTEM.DEFAULT.LOCAL.QUEUE)
-    Returns formatted string with matching records.
-    """
-
-    sys.stderr.write(f"DEBUG: search_by_column called with column='{column}', value='{value}'\n")
-
-    df = load_csv()
-
-    if df.empty:
-        sys.stderr.write("DEBUG: CSV is empty.\n")
-        return "CSV file is empty."
-
-    # Check if column exists in dataframe
-    if column not in df.columns:
-        available_cols = ", ".join(df.columns)
-        sys.stderr.write(f"DEBUG: Column '{column}' not found. Available columns: {available_cols}\n")
-        return f"Column '{column}' not found. Available columns: {available_cols}"
-
-    # Search for value in the specified column (case-insensitive)
-    result = df[
-        df[column].astype(str)
-        .str.contains(value, case=False, na=False)
-    ]
-
-    if result.empty:
-        sys.stderr.write(f"DEBUG: No records found where {column} contains '{value}'.\n")
-        return f"No records found where {column} contains '{value}'."
-
-    sys.stderr.write(f"DEBUG: Found {len(result)} matching records in column '{column}'\n")
-    
-    # Format output as readable text with pipe delimiters
-    output_lines = []
-    output_lines.append(f"Found {len(result)} record(s) where {column} contains '{value}':\n")
-    output_lines.append("=" * 100)
-    
-    for idx, row in result.iterrows():
-        output_lines.append(" | ".join(str(val).strip() for val in row.values))
-        output_lines.append("-" * 100)
-    
-    return "\n".join(output_lines)
 
 
 @mcp.tool()
@@ -348,6 +302,8 @@ async def verify_connectivity():
 
 if __name__ == "__main__":
     # Initialize and run the server
-    # Stdio mode is used for direct client integration (test_mcp_client, llm_client, streamlit_openai_client)
-    sys.stderr.write("DEBUG: Starting MCP Server in stdio mode\n")
-    mcp.run(transport='stdio')
+    # Transport can be set via MQ_MCP_TRANSPORT (default: stdio)
+    transport = os.getenv("MQ_MCP_TRANSPORT", "stdio")
+    
+    sys.stderr.write(f"DEBUG: Starting MCP Server with transport={transport}\n")
+    mcp.run(transport=transport)

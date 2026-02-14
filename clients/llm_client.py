@@ -131,27 +131,7 @@ class LLMToolCaller:
                     }
                 }
             },
-            {
-                "type": "function",
-                "function": {
-                    "name": "search_by_column",
-                    "description": "Search the queue manager dump by a specific column and value",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "column": {
-                                "type": "string",
-                                "description": "The column name to search in (e.g., 'Name', 'Status', 'Type')"
-                            },
-                            "value": {
-                                "type": "string",
-                                "description": "The value to search for in the specified column"
-                            }
-                        },
-                        "required": ["column", "value"]
-                    }
-                }
-            }
+
         ]
         
         self.tools_anthropic = [
@@ -203,24 +183,7 @@ class LLMToolCaller:
                     "required": ["search_string"]
                 }
             },
-            {
-                "name": "search_by_column",
-                "description": "Search the queue manager dump by a specific column and value",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "column": {
-                            "type": "string",
-                            "description": "The column name to search in (e.g., 'Name', 'Status', 'Type')"
-                        },
-                        "value": {
-                            "type": "string",
-                            "description": "The value to search for in the specified column"
-                        }
-                    },
-                    "required": ["column", "value"]
-                }
-            }
+
         ]
         
     async def connect(self):

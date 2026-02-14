@@ -26,7 +26,19 @@ User Input → Client (Guided/AI/Basic) → MCP Protocol (stdio)
 
 ### Server Execution
 *   **Dynamic Clients (Basic/Guided/AI)**: Automatically launch their own private server instance.
-*   **SSE Client**: Requires a standalone server. You must start it manually using `scripts/run_mq_api.bat` (Option 1).
+*   **SSE Client**: Requires a standalone server. You can start it manually using `scripts/run_mq_api.bat` (Option 1).
+
+### Server Execution Modes
+The server (`mqmcpserver.py`) supports two distinct modes, controlled via `.env`:
+
+1.  **Stdio Mode (Default)**:
+    -   Activated when `MQ_MCP_TRANSPORT=stdio` (or unset).
+    -   Used by local clients (`dynamic_client.py`) for process isolation.
+
+2.  **SSE Mode (Server-Sent Events)**:
+    -   Activated when `MQ_MCP_TRANSPORT=sse`.
+    -   Binds to `MQ_MCP_HOST` (default `0.0.0.0`) and `MQ_MCP_PORT` (default `5000`).
+    -   Ideal for remote access or decoupled architectures.
 
 ---
 

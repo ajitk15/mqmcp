@@ -22,6 +22,7 @@ The server exposes three primary tools to any connected MCP client:
 1.  **`dspmq`**: Lists available queue managers and their current state (Running/Ended).
 2.  **`dspmqver`**: Provides detailed IBM MQ version, build level, and installation platform details.
 3.  **`runmqsc`**: The powerhouse tool—executes any MQSC command (e.g., `DISPLAY QLOCAL`, `DISPLAY CHSTATUS`) and returns formatted results.
+4.  **`search_qmgr_dump`**: Instantly searches a local snapshot (`qmgr_dump.csv`) for any string (Queue, Channel, App ID) across all Queue Managers.
 
 ---
 
@@ -31,6 +32,8 @@ The server exposes three primary tools to any connected MCP client:
 mq/
 ├── server/
 │   └── mqmcpserver.py      # ⚡ FastMCP Server (The Core)
+├── resources/
+│   └── qmgr_dump.csv       # 📄 Offline Snapshot Data
 ├── clients/
 │   ├── streamlit_guided_client.py  # 🧭 Guided Assistant (Recommended)
 │   ├── streamlit_basic_client.py   # 🤖 Pattern-based Web UI
@@ -39,6 +42,9 @@ mq/
 │   ├── dynamic_client.py           # 📜 Pattern Detection Library
 │   ├── llm_client.py               # 🔗 LLM Integration Library
 │   └── test_mcp_client.py          # 🧪 Developer CLI Menu
+├── scripts/
+│   ├── run_mq_api.bat              # 🏁 Server Launcher
+│   └── run_*.bat                   # 🚀 Client Launchers
 ├── run_all_assistants.bat          # 🚀 Unified Launch Script
 ├── .env                            # 🔐 Secrets & Configuration
 └── requirements.txt                # 📦 Dependencies
@@ -76,6 +82,11 @@ MQ_URL_BASE=https://your-host:9443/ibmmq/rest/v3/admin/
 MQ_USER_NAME=mqreader
 MQ_PASSWORD=your_password
 OPENAI_API_KEY=sk-... (Optional: for AI Assistant)
+
+# Server Configuration (Optional)
+MQ_MCP_HOST=0.0.0.0      # Bind address for SSE mode
+MQ_MCP_PORT=5000         # Port for SSE mode
+MQ_MCP_TRANSPORT=stdio   # 'stdio' (default) or 'sse'
 ```
 
 ### 3. Launching the Assistant
@@ -87,7 +98,7 @@ Choose your preferred flavor of the assistant:
 | **Unified Launch** | `.\run_all_assistants.bat` | **Launches ALL clients simultaneously.** |
 | **Guided Assistant** | `streamlit run clients/streamlit_guided_client.py` | One-click ops & guided troubleshooting. |
 | **AI Assistant** | `streamlit run clients/streamlit_openai_client.py` | Natural conversations, Cluster support. |
-| **SSE Assistant** | `scripts/run_streamlit_sse.bat` | Real-time events & Smart Workflows. |
+| **SSE Assistant** | `streamlit scripts/run_streamlit_sse.bat` | Real-time events & Smart Workflows. |
 | **Basic Assistant** | `streamlit run clients/streamlit_basic_client.py` | Fast, deterministic pattern matching. |
 | **CLI Tester** | `python clients/test_mcp_client.py` | Developers testing tool responses. |
 
@@ -139,11 +150,3 @@ Add the server to your extension settings using the same `command`, `args`, and 
 *   **Error Handling**: Built-in protection against Windows encoding issues (`UnicodeEncodeError`) and robust `.env` discovery.
 *   **Stderr Debugging**: All server-side logs are routed to `stderr` to prevent corruption of the MCP JSON-RPC protocol on `stdout`.
 
----
-
-## 📜 Legal & License
-
-*   **Copyright**: © 2025 IBM Corp.
-*   **License**: Licensed under the Apache License, Version 2.0.
-
-*Disclaimer: This is a community project and not an official IBM product. For production environments, ensure you enable SSL verification and use secure credential management.*
