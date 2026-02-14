@@ -98,7 +98,7 @@ Choose your preferred flavor of the assistant:
 | **Unified Launch** | `.\run_all_assistants.bat` | **Launches ALL clients simultaneously.** |
 | **Guided Assistant** | `streamlit run clients/streamlit_guided_client.py` | One-click ops & guided troubleshooting. |
 | **AI Assistant** | `streamlit run clients/streamlit_openai_client.py` | Natural conversations, Cluster support. |
-| **SSE Assistant** | `streamlit scripts/run_streamlit_sse.bat` | Real-time events & Smart Workflows. |
+| **SSE Assistant** | `streamlit run clients/streamlit_sse_client.py` | Real-time events & Smart Workflows. |
 | **Basic Assistant** | `streamlit run clients/streamlit_basic_client.py` | Fast, deterministic pattern matching. |
 | **CLI Tester** | `python clients/test_mcp_client.py` | Developers testing tool responses. |
 
