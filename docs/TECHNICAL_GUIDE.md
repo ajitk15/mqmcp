@@ -191,6 +191,45 @@ The MCP server communicates with MQ via the REST interface. You must ensure this
  
  ---
 
+## 🔍 Tool Transparency (Streamlit Apps)
+
+All Streamlit applications support configurable tool call logging to show exactly what MCP tools are being executed.
+
+### Configuration
+Control logging display via `.env`:
+```env
+MQ_SHOW_TOOL_LOGGING=true  # Show tool logging (default)
+MQ_SHOW_TOOL_LOGGING=false # Hide for cleaner UI
+```
+
+### What's Displayed
+When enabled, each tool call shows:
+1. **MCP Tool Name** - Which tool was called (e.g., `runmqsc`, `dspmq`)
+2. **Arguments** - Parameters passed to the tool (JSON format)
+3. **REST API Endpoint** - The actual IBM MQ REST API URL being accessed
+
+### Implementation
+The `tool_logger.py` utility module provides:
+- `display_tool_call(tool_name, args)` - Streamlit UI display function
+- `get_rest_api_url(tool_name, args)` - REST endpoint construction (matches `dynamic_client` logic)
+- `should_show_logging()` - Environment-based toggle
+
+### Example Output
+```
+🔧 Tool Call Details ▼
+MCP Tool:         runmqsc
+Arguments:        {"qmgr_name": "MQQMGR1", "mqsc_command": "DISPLAY QLOCAL(*)"}
+REST Endpoint:    https://MQQMGR1:9443/ibmmq/rest/v3/admin/action/qmgr/MQQMGR1/mqsc
+```
+
+### Benefits
+- **Debugging**: See exactly which tools are called and with what parameters
+- **Learning**: Understand MCP → REST API mapping
+- **Transparency**: Users know what's happening behind the scenes
+- **Configurable**: Can be disabled for production or cleaner UI
+
+---
+
 ## 📊 Metrics & Logging (Splunk Compatible)
 
 ### Console Output (Transparency)

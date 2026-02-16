@@ -12,6 +12,7 @@ A powerful and user-friendly **Model Context Protocol (MCP)** server for IBM MQ,
 *   🛡️ **Installation Auditing**: Retrieve detailed MQ version, build, and installation path info.
 *   🔒 **Production Protection**: Hostname-based filtering prevents accidental queries to production systems.
 *   🎯 **Intelligent Query Routing**: Smart queue listing validates hostnames before executing MQ commands.
+*   🔍 **Tool Transparency**: Configurable logging shows which MCP tools are called and their REST API endpoints.
 *   🤖 **Multiple Interfaces**: Choose between Pattern-based (Basic), AI-powered (OpenAI/Anthropic), Guided (One-click), or SSE (Real-time).
 *   🌐 **Universal REST Support**: Fully integrated with the IBM MQ REST API (mqweb), supporting both Distributed and z/OS managers.
 
@@ -88,6 +89,10 @@ MQ_PASSWORD=your_password
 # Only hostnames starting with these prefixes will be allowed for queries
 # Example: lod=dev, loq=QA, lot=test, lop=production (excluded)
 MQ_ALLOWED_HOSTNAME_PREFIXES=lod,loq,lot
+
+# Tool Logging Display (true/false)
+# Shows which MCP tools are called and their REST API endpoints in Streamlit apps
+MQ_SHOW_TOOL_LOGGING=true
 
 OPENAI_API_KEY=sk-... (Optional: for AI Assistant)
 

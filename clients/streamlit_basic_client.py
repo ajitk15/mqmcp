@@ -3,6 +3,7 @@ import asyncio
 import os
 import sys
 from dynamic_client import DynamicMQClient
+from tool_logger import display_tool_call
 
 # Set up page config
 st.set_page_config(page_title="IBM MQ Assistant", page_icon="🤖", layout="wide")
@@ -11,7 +12,7 @@ st.set_page_config(page_title="IBM MQ Assistant", page_icon="🤖", layout="wide
 script_dir = os.path.dirname(os.path.abspath(__file__))
 SERVER_SCRIPT = os.path.join(script_dir, "..", "server", "mqmcpserver.py")
 
-async def run_mcp_command(prompt):
+async def run_mcp_command(prompt, show_tool_call=None):
     """Execution logic from basic client"""
     client = DynamicMQClient(server_script=SERVER_SCRIPT)
     try:
@@ -20,6 +21,14 @@ async def run_mcp_command(prompt):
         original_input = builtins.input
         builtins.input = lambda _: ""
         try:
+            # Monkey-patch the client's _log_tool_call to also display in UI
+            if show_tool_call:
+                original_log = client._log_tool_call
+                def new_log(tool_name, args):
+                    original_log(tool_name, args)
+                    show_tool_call(tool_name, args)
+                client._log_tool_call = new_log
+            
             response = await client.handle_user_input(prompt)
             return response
         finally:
@@ -180,8 +189,8 @@ if prompt := st.chat_input("Ask something about IBM MQ..."):
             </div>
         """, unsafe_allow_html=True)
         
-        # Execute the command in a new event loop for this interaction
-        full_response = asyncio.run(run_mcp_command(prompt))
+        # Execute the command with tool logging callback
+        full_response = asyncio.run(run_mcp_command(prompt, show_tool_call=display_tool_call))
         message_placeholder.markdown(full_response)
     
     # Add assistant response to chat history

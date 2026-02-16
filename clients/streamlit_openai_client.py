@@ -6,6 +6,7 @@ import signal
 import atexit
 from llm_client import LLMToolCaller
 from dotenv import load_dotenv
+from tool_logger import get_rest_api_url, should_show_logging
 
 # Load environment variables
 load_dotenv()
@@ -257,6 +258,11 @@ for message in st.session_state.messages_llm:
                     
                     if tool.get('args'):
                         st.json(tool['args'], expanded=False)
+                    
+                    # Show REST endpoint if logging is enabled
+                    if should_show_logging():
+                        rest_endpoint = get_rest_api_url(tool['name'], tool.get('args', {}))
+                        st.code(rest_endpoint, language="text")
 
 # User input
 if prompt := st.chat_input("Ask something about IBM MQ..."):
@@ -308,6 +314,11 @@ if prompt := st.chat_input("Ask something about IBM MQ..."):
                         
                         if tool.get('args'):
                             st.json(tool['args'], expanded=False)
+                        
+                        # Show REST endpoint if logging is enabled
+                        if should_show_logging():
+                            rest_endpoint = get_rest_api_url(tool['name'], tool.get('args', {}))
+                            st.code(rest_endpoint, language="text")
         
         # Add assistant response to chat history with tools used
         st.session_state.messages_llm.append({

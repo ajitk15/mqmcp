@@ -2,6 +2,7 @@ import streamlit as st
 import asyncio
 import os
 from dynamic_client import DynamicMQClient
+from tool_logger import display_tool_call
 
 # Set up page config
 st.set_page_config(page_title="IBM MQ Guided Assistant", page_icon="🛠️", layout="wide")
@@ -10,7 +11,7 @@ st.set_page_config(page_title="IBM MQ Guided Assistant", page_icon="🛠️", la
 script_dir = os.path.dirname(os.path.abspath(__file__))
 SERVER_SCRIPT = os.path.join(script_dir, "..", "server", "mqmcpserver.py")
 
-async def run_mcp_command(prompt):
+async def run_mcp_command(prompt, show_tool_call=None):
     """Execution logic from basic client"""
     client = DynamicMQClient(server_script=SERVER_SCRIPT)
     try:
@@ -19,6 +20,14 @@ async def run_mcp_command(prompt):
         original_input = builtins.input
         builtins.input = lambda _: ""
         try:
+            # Monkey-patch the client's _log_tool_call to also display in UI
+            if show_tool_call:
+                original_log = client._log_tool_call
+                def new_log(tool_name, args):
+                    original_log(tool_name, args)
+                    show_tool_call(tool_name, args)
+                client._log_tool_call = new_log
+            
             response = await client.handle_user_input(prompt)
             return response
         finally:
@@ -216,14 +225,14 @@ with st.container(border=True):
                 
                 with st.status("Executing Command...", expanded=True) as status:
                     st.write(f"Connecting to IBM MQ...")
-                    response = asyncio.run(run_mcp_command(final_prompt))
+                    response = asyncio.run(run_mcp_command(final_prompt, show_tool_call=display_tool_call))
                     status.update(label="Run Complete!", state="complete", expanded=False)
                 
                 st.chat_message("assistant").markdown(response)
             elif not config.get("inputs"):
                 with st.chat_message("assistant"):
                     with st.spinner("Executing..."):
-                        response = asyncio.run(run_mcp_command(config["prompt"]))
+                        response = asyncio.run(run_mcp_command(config["prompt"], show_tool_call=display_tool_call))
                         st.markdown(response)
             else:
                 st.error("⚠️ Please provide all required parameters above.")
