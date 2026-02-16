@@ -40,26 +40,41 @@ URL_BASE = os.getenv("MQ_URL_BASE")
 USER_NAME = os.getenv("MQ_USER_NAME")
 PASSWORD = os.getenv("MQ_PASSWORD")
 
+# Allowed hostname prefixes for safety (excludes production)
+ALLOWED_PREFIXES_STR = os.getenv("MQ_ALLOWED_HOSTNAME_PREFIXES", "lod,loq,lot")
+ALLOWED_HOSTNAME_PREFIXES = [prefix.strip() for prefix in ALLOWED_PREFIXES_STR.split(",")]
+
 CSV_PATH = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) / "resources" / "qmgr_dump.csv"
 
 def load_csv():
     """
     Load CSV into dataframe with pipe delimiter
+    CSV now has header row: extractedat|hostname|qmname|objecttype|objectdef
     """
     if not CSV_PATH.exists():
         sys.stderr.write(f"⚠️ WARNING: CSV file not found at {CSV_PATH}\n")
         return pd.DataFrame()
 
     try:
-        # Load CSV with pipe delimiter - no header row in the file
-        # Format: hostname | qmgr | object_type | mqsc_command
+        # Load CSV with pipe delimiter - header row is now present
+        # Format: extractedat | hostname | qmname | objecttype | objectdef
         df = pd.read_csv(
             CSV_PATH, 
             delimiter="|", 
             skipinitialspace=True,
-            header=None,  # No header row in CSV
-            names=['hostname', 'qmgr', 'object_type', 'mqsc_command']  # Define column names explicitly
+            header=0  # Use first row as header
         )
+        
+        # Rename columns to match expected format in the rest of the code
+        df = df.rename(columns={
+            'qmname': 'qmgr',
+            'objecttype': 'object_type',
+            'objectdef': 'mqsc_command'
+        })
+        
+        # Optional: Convert extractedat to datetime if needed
+        if 'extractedat' in df.columns:
+            df['extractedat'] = pd.to_datetime(df['extractedat'], errors='coerce')
         
         sys.stderr.write(f"✅ CSV loaded successfully: {len(df)} rows, {len(df.columns)} columns\n")
         sys.stderr.write(f"   Columns: {list(df.columns)}\n")
@@ -69,6 +84,21 @@ def load_csv():
         import traceback
         sys.stderr.write(traceback.format_exc())
         return pd.DataFrame()
+
+def is_hostname_allowed(hostname: str) -> tuple[bool, str]:
+    """
+    Check if a hostname is allowed based on prefix filtering.
+    Returns (True, "") if allowed, or (False, "reason message") if blocked.
+    """
+    hostname_lower = hostname.lower().strip()
+    
+    for prefix in ALLOWED_HOSTNAME_PREFIXES:
+        if hostname_lower.startswith(prefix.lower()):
+            return True, ""
+    
+    allowed_list = ", ".join(ALLOWED_HOSTNAME_PREFIXES)
+    message = f"🚫 Access to production systems is restricted for safety. This query targets hostname '{hostname}' which is not in the allowed list.\n\nAllowed hostname prefixes: {allowed_list}\n\nPlease use non-production environments for queries."
+    return False, message
 
 
 # Debugging: Write to stderr instead of stdout (Stdout is reserved for MCP protocol)
@@ -133,6 +163,16 @@ def search_qmgr_dump(search_string: str) -> str:
     if result.empty:
         sys.stderr.write(f"DEBUG: No matching records found for '{search_string}'.\n")
         return f"❌ No records found matching '{search_string}'."
+    
+    # Filter by allowed hostname prefixes
+    sys.stderr.write(f"DEBUG: Filtering by allowed hostname prefixes: {ALLOWED_HOSTNAME_PREFIXES}\n")
+    hostname_mask = result['hostname'].apply(lambda h: is_hostname_allowed(str(h))[0])
+    result = result[hostname_mask]
+    
+    if result.empty:
+        allowed_list = ", ".join(ALLOWED_HOSTNAME_PREFIXES)
+        sys.stderr.write(f"DEBUG: No records after hostname filtering.\n")
+        return f"❌ No results found for '{search_string}' in allowed environments.\n\n🚫 Production systems are excluded for safety.\n\nAllowed hostname prefixes: {allowed_list}"
 
     sys.stderr.write(f"DEBUG: Found {len(result)} matching records\n")
     
@@ -173,6 +213,7 @@ async def dspmq() -> str:
         "ibm-mq-rest-csrf-token": "token"
     }    
     
+    # For dspmq, we use localhost since we're listing all queue managers
     url = URL_BASE + "qmgr/"
 
     auth = httpx.BasicAuth(username=USER_NAME, password=PASSWORD)
@@ -202,6 +243,7 @@ async def dspmqver() -> str:
         "ibm-mq-rest-csrf-token": "token"
     }    
     
+    # For dspmqver, we use localhost since it's installation-level info
     url = URL_BASE + "installation"
 
     auth = httpx.BasicAuth(username=USER_NAME, password=PASSWORD)
@@ -238,9 +280,22 @@ async def runmqsc(qmgr_name: str, mqsc_command: str) -> str:
         "ibm-mq-rest-csrf-token": "a"
     }
     
+    # Check if qmgr_name corresponds to an allowed hostname
+    # First, try to find the hostname from the CSV based on qmgr_name
+    df = load_csv()
+    if not df.empty:
+        qmgr_matches = df[df['qmgr'].str.upper() == qmgr_name.upper()]
+        if not qmgr_matches.empty:
+            hostname = qmgr_matches.iloc[0]['hostname']
+            allowed, message = is_hostname_allowed(hostname)
+            if not allowed:
+                return message
+    
     data = "{\"type\":\"runCommand\",\"parameters\":{\"command\":\"" + mqsc_command + "\"}}"
     
-    url = URL_BASE + "action/qmgr/" + qmgr_name + "/mqsc"
+    # Replace 'localhost' with queue manager name in the URL
+    url_with_qmgr_host = URL_BASE.replace('localhost', qmgr_name)
+    url = url_with_qmgr_host + "action/qmgr/" + qmgr_name + "/mqsc"
 
     auth = httpx.BasicAuth(username=USER_NAME, password=PASSWORD)
     async with httpx.AsyncClient(verify=False,auth=auth) as client:

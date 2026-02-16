@@ -54,13 +54,21 @@ class DynamicMQClient:
         atexit.register(self.cleanup)
         
         # Define patterns for intent detection
+        # NOTE: More specific patterns should come BEFORE general ones
         self.intent_patterns = {
+            'check_version': [
+                r'version',
+                r'what.*version',
+                r'show.*version',
+                r'\bdspmqver\b',
+            ],
             'list_qmgrs': [
-                r'list.*queue\s*managers?',
-                r'show.*queue\s*managers?',
-                r'display.*queue\s*managers?',
-                r'what.*queue\s*managers?',
-                r'get.*queue\s*managers?',
+                # Must include "manager" to avoid matching "list queues"
+                r'list.*queue\s+managers?',
+                r'show.*queue\s+managers?',
+                r'display.*queue\s+managers?',
+                r'what.*queue\s+managers?',
+                r'get.*queue\s+managers?',
                 r'\bdspmq\b',
             ],
             'check_queue_depth': [
@@ -71,12 +79,13 @@ class DynamicMQClient:
                 r'messages.*(?:in|on)\s+([\w\.]+)',
             ],
             'list_queues': [
-                r'list.*queues?',
-                r'show.*queues?',
-                r'display.*queues?',
-                r'what.*queues?',
-                r'get.*queues?',
-                r'all.*queues?',
+                # Match "list queues" but NOT "list queue managers"
+                r'list.*queues?\s+(?:on|from|in|for)',  # "list queues on QMGR"
+                r'list.*all.*queues?',                  # "list all queues"
+                r'show.*queues?\s+(?:on|from|in)',      # "show queues on QMGR"  
+                r'display.*queues?\s+(?:on|from|in)',   # "display queues on QMGR"
+                r'get.*queues?\s+(?:on|from|in)',       # "get queues on QMGR"
+                r'what.*queues?\s+(?:on|from|in)',      # "what queues on QMGR"
             ],
             'list_channels': [
                 r'list.*channels?',
@@ -259,7 +268,8 @@ class DynamicMQClient:
             queue_name = params.get('entity', 'UNKNOWN')
             return await self._handle_check_queue_depth(qmgr, queue_name, user_input)
         elif intent == 'list_queues':
-            return await self._handle_list_queues(qmgr, user_input)
+            # Smart flow: Check hostname first, then search
+            return await self._handle_list_queues_smart(qmgr, user_input)
         elif intent == 'list_channels':
             return await self._handle_list_channels(qmgr, user_input)
         elif intent == 'queue_status':
@@ -285,10 +295,31 @@ class DynamicMQClient:
         else:
             return "I'm not sure how to help with that. Try asking to list queue managers or check a queue depth."
 
+    def _get_rest_api_url(self, tool_name: str, args: dict) -> str:
+        """Construct the IBM MQ REST API URL for a given tool call"""
+        # Load base URL from environment
+        base_url = os.getenv("MQ_URL_BASE", "https://localhost:9443/ibmmq/rest/v3/admin/")
+        
+        if tool_name == "dspmq":
+            return f"{base_url}qmgr/"
+        elif tool_name == "dspmqver":
+            return f"{base_url}installation"
+        elif tool_name == "runmqsc":
+            qmgr = args.get('qmgr_name', 'UNKNOWN')
+            # Replace 'localhost' with queue manager name in the URL
+            url_with_qmgr_host = base_url.replace('localhost', qmgr)
+            return f"{url_with_qmgr_host}action/qmgr/{qmgr}/mqsc"
+        elif tool_name == "search_qmgr_dump":
+            return "[CSV File] resources/qmgr_dump.csv (No REST API)"
+        else:
+            return "Unknown endpoint"
+    
     def _log_tool_call(self, tool_name: str, args: dict):
-        """Log tool call details"""
-        print(f"    [ENDPOINT] Calling tool: {tool_name}")
+        """Log tool call details with REST API URL"""
+        print(f"    [MCP TOOL] {tool_name}")
         print(f"    [ARGS] {args}")
+        rest_url = self._get_rest_api_url(tool_name, args)
+        print(f"    [REST API] {rest_url}")
             
     async def _handle_list_qmgrs(self) -> str:
         """Handle listing queue managers"""
@@ -521,6 +552,97 @@ class DynamicMQClient:
             return f"**Tool:** `search_qmgr_dump`\n**Query:** `{query}`\n\n**Result:**\n{result.content[0].text}"
         except Exception as e:
             return f"Error: {e}"
+    
+    async def _handle_list_queues_smart(self, qmgr: Optional[str], user_input: str) -> str:
+        """
+        Smart queue listing: Check hostname first, then search.
+        
+        Flow:
+        1. If queue manager specified, look up its hostname from CSV
+        2. Check if hostname is in allowed list  
+        3. If blocked, return early with helpful message
+        4. If allowed, proceed with search
+        """
+        print(f"    Detected intent: List Queues (Smart)")
+        
+        if not qmgr:
+            # No specific queue manager - default to searching for QLOCAL
+            print("    No queue manager specified, searching for all local queues")
+            return await self._handle_search("QLOCAL", user_input)
+        
+        print(f"    Queue Manager: {qmgr}")
+        print(f"    Step 1: Reading CSV to find hostname for {qmgr}...")
+        
+        try:
+            # Load allowed prefixes from environment
+            allowed_prefixes_str = os.getenv("MQ_ALLOWED_HOSTNAME_PREFIXES", "lod,loq,lot")
+            allowed_prefixes = [p.strip().lower() for p in allowed_prefixes_str.split(",")]
+            print(f"    Allowed hostname prefixes: {', '.join(allowed_prefixes)}")
+            
+            # Read the CSV file to find the hostname
+            csv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "resources", "qmgr_dump.csv")
+            
+            if not os.path.exists(csv_path):
+                return f"❌ Error: CSV file not found at {csv_path}"
+            
+            import pandas as pd
+            df = pd.read_csv(csv_path, delimiter="|", skipinitialspace=True, header=0)
+            
+            # Strip whitespace from all string columns
+            df = df.map(lambda x: x.strip() if isinstance(x, str) else x)
+            
+            # Find first entry for this queue manager
+            qmgr_rows = df[df['qmname'].str.upper() == qmgr.upper()]
+            
+            if qmgr_rows.empty:
+                return f"❌ Queue manager '{qmgr}' not found in CSV"
+            
+            # Get hostname from first entry
+            hostname = str(qmgr_rows.iloc[0]['hostname']).strip().lower()
+            print(f"    Step 2: Found hostname: '{hostname}'")
+            
+            # Check if hostname starts with any allowed prefix
+            is_allowed = any(hostname.startswith(prefix) for prefix in allowed_prefixes)
+            
+            if not is_allowed:
+                print(f"    Step 3: ❌ Hostname check FAILED")
+                print(f"              Hostname '{hostname}' does not start with allowed prefixes: {', '.join(allowed_prefixes)}")
+                
+                allowed_list = ", ".join(allowed_prefixes)
+                blocking_msg = f"""🚫 Access to production systems is restricted for safety.
+
+Queue Manager: {qmgr}
+Hostname: {hostname}
+
+This hostname is not in the allowed list.
+Allowed hostname prefixes: {allowed_list}
+
+Please use non-production environments (e.g., lod*, loq*, lot*) for queries."""
+                
+                return f"**Tool:** Hostname Pre-Check\n**Query:** `{qmgr}`\n\n**Result:**\n{blocking_msg}"
+            
+            print(f"    Step 3: ✅ Hostname check PASSED")
+            print(f"              Hostname '{hostname}' starts with allowed prefix")
+            print(f"    Step 4: Calling runmqsc to list queues on {qmgr}...")
+            
+            # Hostname is allowed, call runmqsc to display queues
+            mqsc_command = "DISPLAY QUEUE(*) WHERE(QTYPE EQ QLOCAL)"
+            
+            self._log_tool_call("runmqsc", {"qmgr_name": qmgr, "mqsc_command": mqsc_command})
+            
+            result = await self.session.call_tool("runmqsc", {
+                "qmgr_name": qmgr,
+                "mqsc_command": mqsc_command
+            })
+            
+            result_text = result.content[0].text
+            return f"**Tool:** `runmqsc`\n**Queue Manager:** `{qmgr}`\n**Hostname:** `{hostname}` ✅\n**Command:** `{mqsc_command}`\n\n**Result:**\n{result_text}"
+            
+        except Exception as e:
+            import traceback
+            error_detail = traceback.format_exc()
+            print(f"    Error: {error_detail}")
+            return f"Error looking up queue manager {qmgr}: {e}"
             
     def _handle_unknown_intent(self, user_input: str) -> str:
         """Handle unknown intents"""

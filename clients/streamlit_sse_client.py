@@ -310,19 +310,3 @@ if choice and choice != "Select an operation...":
                     st.success("Command Executed Successfully")
                     st.code(result, language="text")
 
-# Add a new section to display qmgr_dump.csv data
-st.sidebar.header("Queue Manager Data")
-if st.sidebar.button("Load Queue Manager Data"):
-    try:
-        response = requests.get("http://127.0.0.1:8001/qmgr_dump")
-        if response.status_code == 200:
-            data = response.json().get("result", [])
-            if data:
-                st.write("### Queue Manager Data")
-                st.dataframe(data)
-            else:
-                st.warning("No data found in qmgr_dump.csv.")
-        else:
-            st.error(f"Failed to load data: {response.status_code}")
-    except Exception as e:
-        st.error(f"Error: {str(e)}")

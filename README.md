@@ -10,6 +10,8 @@ A powerful and user-friendly **Model Context Protocol (MCP)** server for IBM MQ,
 *   📊 **Deep Monitoring**: Check queue depths, message status, and channel health with natural language.
 *   🧠 **Smart Workflows**: Automatically locates queues across any Queue Manager (including Clusters) without needing explicit targeting.
 *   🛡️ **Installation Auditing**: Retrieve detailed MQ version, build, and installation path info.
+*   🔒 **Production Protection**: Hostname-based filtering prevents accidental queries to production systems.
+*   🎯 **Intelligent Query Routing**: Smart queue listing validates hostnames before executing MQ commands.
 *   🤖 **Multiple Interfaces**: Choose between Pattern-based (Basic), AI-powered (OpenAI/Anthropic), Guided (One-click), or SSE (Real-time).
 *   🌐 **Universal REST Support**: Fully integrated with the IBM MQ REST API (mqweb), supporting both Distributed and z/OS managers.
 
@@ -81,6 +83,12 @@ Create a `.env` file in the root directory (or update the existing one):
 MQ_URL_BASE=https://your-host:9443/ibmmq/rest/v3/admin/
 MQ_USER_NAME=mqreader
 MQ_PASSWORD=your_password
+
+# Production Protection: Allowed hostname prefixes (comma-separated)
+# Only hostnames starting with these prefixes will be allowed for queries
+# Example: lod=dev, loq=QA, lot=test, lop=production (excluded)
+MQ_ALLOWED_HOSTNAME_PREFIXES=lod,loq,lot
+
 OPENAI_API_KEY=sk-... (Optional: for AI Assistant)
 
 # Server Configuration (Optional)

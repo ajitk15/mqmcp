@@ -77,6 +77,69 @@ Our clients (Dynamic, SSE, & AI) automatically solve this using a multi-step wor
 
 ---
 
+## 🔒 Production Protection (Hostname Filtering)
+
+The ecosystem implements hostname-based filtering to prevent accidental queries against production systems.
+
+### Configuration
+Define allowed hostname prefixes in `.env`:
+```env
+MQ_ALLOWED_HOSTNAME_PREFIXES=lod,loq,lot
+```
+
+### How It Works
+1. **Server-Side Filtering**: The `search_qmgr_dump` tool filters results by hostname prefix
+2. **Pre-Execution Validation**: The `runmqsc` tool validates hostname before executing commands
+3. **Client-Side Validation**: The dynamic client performs hostname checks before calling MCP tools
+
+### User Experience
+
+✅ **Allowed (Non-Production)**:
+```
+Step 2: Found hostname: 'lodserver1'
+Step 3: ✅ Hostname check PASSED
+Step 4: Calling runmqsc to list queues...
+```
+
+🚫 **Blocked (Production)**:
+```
+Step 2: Found hostname: 'lopserver1'
+Step 3: ❌ Hostname check FAILED
+
+🚫 Access to production systems is restricted for safety.
+Allowed hostname prefixes: lod, loq, lot
+```
+
+---
+
+##🎯 Smart Query Routing
+
+The dynamic client implements intelligent query routing that validates hostnames before executing MQ commands.
+
+### Smart Queue Listing Flow
+When a user asks "List all the queues on MQQMGR1":
+
+1. **CSV Lookup**: Reads `qmgr_dump.csv` to find the hostname for MQQMGR1
+2. **Extract Hostname**: Gets hostname from first matching row
+3. **Validate Prefix**: Checks if hostname starts with allowed prefix
+4. **Block or Execute**:
+   - If blocked: Returns helpful error message
+   - If allowed: Calls `runmqsc` with `DISPLAY QUEUE(*) WHERE(QTYPE EQ QLOCAL)`
+
+### Intent Pattern Improvements
+Updated regex patterns for better specificity:
+
+```python
+'list_qmgrs': [
+    r'list.*queue\s+managers?',  # Requires "manager" keyword
+],
+'list_queues': [
+    r'list.*queues?\s+(?:on|from|in|for)',  # Requires context
+],
+```
+
+---
+
 ## ⚙️ Connectivity Prerequisites
 
 Before the ecosystem can function, the underlying **IBM MQ REST API** must be operational. 
