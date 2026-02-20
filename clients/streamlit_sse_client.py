@@ -4,6 +4,7 @@ import requests
 from mcp import ClientSession
 from mcp.client.sse import sse_client
 from dotenv import load_dotenv
+from tool_logger import get_rest_api_url, should_show_logging
 
 # Load environment variables
 # Load environment variables
@@ -36,7 +37,7 @@ st.set_page_config(page_title="IBM MQ MCP Client (SSE)", page_icon="⚡", layout
 
 # Validates and sets the server URL and connection status
 if "server_url" not in st.session_state:
-    st.session_state.server_url = "http://127.0.0.1:8000/sse"
+    st.session_state.server_url = "http://127.0.0.1:5000/sse"
 if "connection_status" not in st.session_state:
     st.session_state.connection_status = "unknown"
 
@@ -268,42 +269,73 @@ if choice and choice != "Select an operation...":
                 
                 if workflow_type in ["check_depth", "check_status"]:
                     queue_name = tool_args.get("queue_name")
-                    command_template = "DISPLAY QLOCAL({queue}) CURDEPTH" if workflow_type == "check_depth" else "DISPLAY QSTATUS({queue}) TYPE(QUEUE) ALL"
+
+                    # --- Queue type detection by prefix ---
+                    if workflow_type == "check_depth":
+                        q_upper = queue_name.upper()
+                        if q_upper.startswith("QR"):
+                            queue_type = "Remote Queue"
+                            queue_type_icon = "🌐"
+                            command_template = "DISPLAY QREMOTE({queue}) RQMNAME RNAME XMITQ"
+                        elif q_upper.startswith("QA"):
+                            queue_type = "Alias Queue"
+                            queue_type_icon = "🔀"
+                            command_template = "DISPLAY QALIAS({queue})"  # shows TARGET
+                        else:
+                            queue_type = "Local Queue" if q_upper.startswith("QL") else "Queue"
+                            queue_type_icon = "📦"
+                            command_template = "DISPLAY QLOCAL({queue}) CURDEPTH"
+
+                        st.info(f"{queue_type_icon} **Queue Type Detected:** `{queue_name}` is identified as a **{queue_type}** based on its prefix.")
+                    else:
+                        command_template = "DISPLAY QSTATUS({queue}) TYPE(QUEUE) ALL"
+
                     
                     with st.spinner(f"🔍 Searching for {queue_name}..."):
                         # Step 1: Search
-                        st.info(f"**Tool:** `search_qmgr_dump` | **Args:** `{{'search_string': '{queue_name}'}}`")
-                        search_res = asyncio.run(call_mcp_tool(st.session_state.server_url, "search_qmgr_dump", {"search_string": queue_name}))
+                        search_args = {"search_string": queue_name}
+                        search_res = asyncio.run(call_mcp_tool(st.session_state.server_url, "search_qmgr_dump", search_args))
+                        with st.expander("🔧 Tool Called: `search_qmgr_dump`", expanded=True):
+                            st.markdown("**Tool:** `search_qmgr_dump`")
+                            st.json(search_args)
+                            if should_show_logging():
+                                st.code(get_rest_api_url("search_qmgr_dump", search_args), language="text")
+                            st.markdown("**Output:**")
+                            st.code(search_res, language="text")
                         
                         # Step 2: Parse QMGRs
                         qmgrs = extract_qmgrs_from_search(search_res)
                         
                         if not qmgrs:
                             st.warning(f"Could not find queue '{queue_name}' on any known queue manager.")
-                            st.text(search_res) # Show search output for debugging
                         else:
                             st.success(f"Found on {len(qmgrs)} Queue Manager(s): {', '.join(qmgrs)}")
                             
                             # Step 3: Check Depth/Status on each
                             for qmgr in qmgrs:
-                                with st.status(f"Checking {qmgr}...", expanded=True):
-                                    cmd = command_template.format(queue=queue_name)
-                                    st.write(f"**Tool:** `runmqsc`")
-                                    st.code(f"MQSC: {cmd}", language="properties")
-                                    res = asyncio.run(call_mcp_tool(st.session_state.server_url, "runmqsc", {
-                                        "qmgr_name": qmgr,
-                                        "mqsc_command": cmd
-                                    }))
+                                cmd = command_template.format(queue=queue_name)
+                                runmqsc_args = {"qmgr_name": qmgr, "mqsc_command": cmd}
+                                with st.spinner(f"Running runmqsc on {qmgr}..."):
+                                    res = asyncio.run(call_mcp_tool(st.session_state.server_url, "runmqsc", runmqsc_args))
+                                with st.expander(f"🔧 Tool Called: `runmqsc` on {qmgr}", expanded=True):
+                                    st.markdown("**Tool:** `runmqsc`")
+                                    st.json(runmqsc_args)
+                                    if should_show_logging():
+                                        st.code(get_rest_api_url("runmqsc", runmqsc_args), language="text")
+                                    st.markdown("**Output:**")
                                     st.code(res, language="text")
                 st.stop() # End execution after smart workflow
 
             # Execute standard tool
-
-            # Execute
             with st.spinner(f"Running {op_config['tool']}..."):
-                st.info(f"**Tool:** `{op_config['tool']}`\n\n**Args:** `{final_args}`")
                 result = asyncio.run(call_mcp_tool(st.session_state.server_url, op_config["tool"], final_args))
-                
+            
+            with st.expander(f"🔧 Tool Called: `{op_config['tool']}`", expanded=True):
+                st.markdown(f"**Tool:** `{op_config['tool']}`")
+                st.json(final_args)
+                if should_show_logging():
+                    st.code(get_rest_api_url(op_config["tool"], final_args), language="text")
+                st.markdown("**Output:**")
                 if "❌ Error" in result:
                     st.error(result)
                 else:
