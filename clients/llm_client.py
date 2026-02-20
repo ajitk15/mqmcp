@@ -46,12 +46,103 @@ try:
 except ImportError:
     HAS_ANTHROPIC = False
 
+try:
+    import google.generativeai as genai
+    HAS_GEMINI = True
+except ImportError:
+    HAS_GEMINI = False
+
 
 class LLMToolCaller:
     """
     Uses an LLM to intelligently call MCP tools based on user input.
-    Supports both OpenAI and Anthropic.
+    Supports OpenAI, Anthropic, and Google Gemini.
     """
+
+    # Shared system prompt used by all LLM providers
+    _SYSTEM_PROMPT = """You are an IBM MQ expert assistant. Your PRIMARY JOB is to call tools to answer user questions. Do NOT ask users for input.
+
+QUEUE NAMING CONVENTIONS - YOU MUST KNOW THESE:
+- QL* = Local Queue (e.g., QL.IN.APP1, QL.OUT.APP2)
+- QA* = Alias Queue (e.g., QA.IN.APP1 - points to another queue via TARGET)
+- QR* = Remote Queue (e.g., QR.REMOTE.Q - references queue on remote QM)
+- Others = System/Application specific queues
+
+CRITICAL HANDLING FOR ALIAS QUEUES:
+When user asks about depth of a QA* (alias) queue:
+1. Search for the alias queue to find its TARGET queue name
+2. If TARGET is a QL* queue, also search for and query that QL* queue
+3. Report BOTH: The alias → target mapping AND the actual depth of the target queue
+4. Example: User asks "depth of QA.IN.APP1"
+   - Find QA.IN.APP1 → TARGET('QL.IN.APP1')
+   - Query QL.IN.APP1 for CURDEPTH
+   - Response: "Alias QA.IN.APP1 points to QL.IN.APP1, which has current depth: 42"
+
+MANDATORY RULES - YOU MUST FOLLOW THESE:
+1. When a user asks about ANY queue, ALWAYS search for it first using search_qmgr_dump
+2. When search results show queue manager info, IMMEDIATELY extract ALL queue manager names
+3. **CRITICAL**: If a queue exists on MULTIPLE queue managers, you MUST query ALL of them
+4. NEVER ask "which queue manager?" if search results already show it
+5. ALWAYS make the next tool call in the SAME iteration - do not wait for user response
+6. If querying an ALIAS queue for depth:
+   - Query the alias to see its TARGET
+   - Then query the TARGET queue (if QL* prefix) for actual depth
+7. Queue depth MQSC commands:
+   - Local (QL*): DISPLAY QLOCAL(<QUEUE_NAME>) CURDEPTH
+   - Remote (QR*): DISPLAY QREMOTE(<QUEUE_NAME>)
+   - Alias (QA*): DISPLAY QALIAS(<QUEUE_NAME>) to see TARGET
+8. Queue Status:
+   - Command: DISPLAY QSTATUS(<QUEUE_NAME>) TYPE(QUEUE) ALL
+   - Purpose: Check Open Input/Output Count (IPPROCS/OPPROCS)
+9. Cluster Queues:
+   - Command: DISPLAY QLOCAL(<QUEUE_NAME>) CLUSTER
+   - If CLUSTER attribute is NOT empty, it is a cluster queue.
+   - List ALL Queue Managers found in the initial 'search_qmgr_dump' step as hosting this cluster queue.
+10. COMPLETE THE WORKFLOW - user asks question → search → identify ALL QMs → runmqsc on EACH → return answer
+
+YOU MUST NOT:
+- Ask "which queue manager?" when search already found it
+- Stop at alias queue definition - resolve to target and get actual data
+- Wait for user input when you can call tools
+- Provide generic MQ command examples instead of actual values
+- Query only ONE queue manager when the queue exists on MULTIPLE queue managers
+
+EXAMPLE WORKFLOWS:
+
+Example 1 - Single Queue Manager:
+User: "What is the current depth of queue QL.OUT.APP3?"
+YOU MUST:
+1. Call search_qmgr_dump('QL.OUT.APP3') → finds "QL.OUT.APP3 | MQQMGR1 | QLOCAL"
+2. Call runmqsc(qmgr_name='MQQMGR1', mqsc_command='DISPLAY QLOCAL(QL.OUT.APP3) CURDEPTH')
+3. Return: "The current depth of queue QL.OUT.APP3 on MQQMGR1 is 42"
+
+Example 2 - MULTIPLE Queue Managers (CRITICAL):
+User: "What is the current depth of queue QL.IN.APP1?"
+YOU MUST:
+1. Call search_qmgr_dump('QL.IN.APP1')
+   → Result: "Found on queue managers: MQQMGR1, MQQMGR2"
+2. Call runmqsc(qmgr_name='MQQMGR1', mqsc_command='DISPLAY QLOCAL(QL.IN.APP1) CURDEPTH')
+   → Result: "CURDEPTH(15)"
+3. Call runmqsc(qmgr_name='MQQMGR2', mqsc_command='DISPLAY QLOCAL(QL.IN.APP1) CURDEPTH')
+   → Result: "CURDEPTH(8)"
+4. Return: "Queue QL.IN.APP1 exists on 2 QMs: MQQMGR1 (depth=15), MQQMGR2 (depth=8)"
+
+Example 3 - Alias Queue:
+User: "What is the depth of QA.IN.APP1?"
+YOU MUST:
+1. Call search_qmgr_dump('QA.IN.APP1') → finds "QA.IN.APP1 | MQQMGR1 | QALIAS"
+2. Call runmqsc(qmgr_name='MQQMGR1', mqsc_command='DISPLAY QALIAS(QA.IN.APP1)')
+   → Result shows: "TARGET('QL.IN.APP1')"
+3. Now search/query the TARGET: Call runmqsc(qmgr_name='MQQMGR1', mqsc_command='DISPLAY QLOCAL(QL.IN.APP1) CURDEPTH')
+   → Result shows: "Queue QL.IN.APP1 current depth is 85"
+4. Return: "Alias QA.IN.APP1 points to QL.IN.APP1. The target queue has current depth: 85"
+
+DON'T DO THIS:
+✗ Call search_qmgr_dump and then ask "which queue manager?"
+✗ Return alias definition and stop - always resolve to target
+✗ Ask user for confirmation before calling runmqsc
+✗ Report "no depth info" for alias - query the target queue instead
+✗ Query only MQQMGR1 when queue exists on both MQQMGR1 and MQQMGR2"""
     
     def __init__(self, server_script=None, provider="openai"):
         if server_script is None:
@@ -185,6 +276,58 @@ class LLMToolCaller:
             },
 
         ]
+
+        # Gemini uses the same schema structure as OpenAI (JSON Schema)
+        self.tools_gemini = [
+            {
+                "name": "dspmq",
+                "description": "List all IBM MQ queue managers and their running status (running/stopped)",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                }
+            },
+            {
+                "name": "dspmqver",
+                "description": "Get IBM MQ version, build level, and installation path details",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                }
+            },
+            {
+                "name": "runmqsc",
+                "description": "Execute an MQSC command on a specific IBM MQ queue manager. Use this for operations like checking queue depth, listing queues, displaying channels, etc.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "qmgr_name": {
+                            "type": "string",
+                            "description": "Name of the queue manager (e.g., 'QM1', 'PROD_QM')"
+                        },
+                        "mqsc_command": {
+                            "type": "string",
+                            "description": "MQSC command to execute. Examples: 'DISPLAY QLOCAL(*)' to list all queues, 'DISPLAY QLOCAL(MYQUEUE) CURDEPTH' to check queue depth, 'DISPLAY CHANNEL(*)' to list channels"
+                        }
+                    },
+                    "required": ["qmgr_name", "mqsc_command"]
+                }
+            },
+            {
+                "name": "search_qmgr_dump",
+                "description": "Search the queue manager dump for a specific string across all columns",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "search_string": {
+                            "type": "string",
+                            "description": "The string to search for in the queue manager data"
+                        }
+                    },
+                    "required": ["search_string"]
+                }
+            },
+        ]
         
     async def connect(self):
         """Connect to the MCP server"""
@@ -296,92 +439,6 @@ class LLMToolCaller:
         
         print("🤖 Asking OpenAI GPT-4...")
         
-        system_prompt = """You are an IBM MQ expert assistant. Your PRIMARY JOB is to call tools to answer user questions. Do NOT ask users for input.
-
-QUEUE NAMING CONVENTIONS - YOU MUST KNOW THESE:
-- QL* = Local Queue (e.g., QL.IN.APP1, QL.OUT.APP2)
-- QA* = Alias Queue (e.g., QA.IN.APP1 - points to another queue via TARGET)
-- QR* = Remote Queue (e.g., QR.REMOTE.Q - references queue on remote QM)
-- Others = System/Application specific queues
-
-CRITICAL HANDLING FOR ALIAS QUEUES:
-When user asks about depth of a QA* (alias) queue:
-1. Search for the alias queue to find its TARGET queue name
-2. If TARGET is a QL* queue, also search for and query that QL* queue
-3. Report BOTH: The alias → target mapping AND the actual depth of the target queue
-4. Example: User asks "depth of QA.IN.APP1"
-   - Find QA.IN.APP1 → TARGET('QL.IN.APP1')
-   - Query QL.IN.APP1 for CURDEPTH
-   - Response: "Alias QA.IN.APP1 points to QL.IN.APP1, which has current depth: 42"
-
-MANDATORY RULES - YOU MUST FOLLOW THESE:
-1. When a user asks about ANY queue, ALWAYS search for it first using search_qmgr_dump
-2. When search results show queue manager info, IMMEDIATELY extract ALL queue manager names
-3. **CRITICAL**: If a queue exists on MULTIPLE queue managers, you MUST query ALL of them
-4. NEVER ask "which queue manager?" if search results already show it
-5. ALWAYS make the next tool call in the SAME iteration - do not wait for user response
-6. If querying an ALIAS queue for depth:
-   - Query the alias to see its TARGET
-   - Then query the TARGET queue (if QL* prefix) for actual depth
-7. Queue depth MQSC commands:
-   - Local (QL*): DISPLAY QLOCAL(<QUEUE_NAME>) CURDEPTH
-   - Remote (QR*): DISPLAY QREMOTE(<QUEUE_NAME>) CURDEPTH
-   - Alias (QA*): DISPLAY QALIAS(<QUEUE_NAME>) to see TARGET
-8. Queue Status:
-   - Command: DISPLAY QSTATUS(<QUEUE_NAME>) TYPE(QUEUE) ALL
-   - Purpose: Check Open Input/Output Count (IPPROCS/OPPROCS)
-9. Cluster Queues:
-   - Command: DISPLAY QLOCAL(<QUEUE_NAME>) CLUSTER
-   - If CLUSTER attribute is NOT empty, it is a cluster queue.
-   - List ALL Queue Managers found in the initial 'search_qmgr_dump' step as hosting this cluster queue.
-10. COMPLETE THE WORKFLOW - user asks question → search → identify ALL QMs → runmqsc on EACH → return answer
-
-YOU MUST NOT:
-- Ask "which queue manager?" when search already found it
-- Stop at alias queue definition - resolve to target and get actual data
-- Wait for user input when you can call tools
-- Provide generic MQ command examples instead of actual values
-- Query only ONE queue manager when the queue exists on MULTIPLE queue managers
-
-EXAMPLE WORKFLOWS:
-
-Example 1 - Single Queue Manager:
-User: "What is the current depth of queue QL.OUT.APP3?"
-YOU MUST:
-1. Call search_qmgr_dump('QL.OUT.APP3') → finds "QL.OUT.APP3 | MQQMGR1 | QLOCAL"
-2. Call runmqsc(qmgr_name='MQQMGR1', mqsc_command='DISPLAY QLOCAL(QL.OUT.APP3) CURDEPTH')
-3. Return: "The current depth of queue QL.OUT.APP3 on MQQMGR1 is 42"
-
-Example 2 - MULTIPLE Queue Managers (CRITICAL):
-User: "What is the current depth of queue QL.IN.APP1?"
-YOU MUST:
-1. Call search_qmgr_dump('QL.IN.APP1') 
-   → Result: "Found on queue managers: MQQMGR1, MQQMGR2"
-2. Call runmqsc(qmgr_name='MQQMGR1', mqsc_command='DISPLAY QLOCAL(QL.IN.APP1) CURDEPTH')
-   → Result: "CURDEPTH(15)"
-3. Call runmqsc(qmgr_name='MQQMGR2', mqsc_command='DISPLAY QLOCAL(QL.IN.APP1) CURDEPTH')
-   → Result: "CURDEPTH(8)"
-4. Return: "Queue QL.IN.APP1 exists on multiple queue managers:
-   - MQQMGR1: current depth is 15
-   - MQQMGR2: current depth is 8"
-
-Example 3 - Alias Queue (THE KEY DIFFERENCE):
-User: "What is the current depth of queue QA.IN.APP1?"
-YOU MUST:
-1. Call search_qmgr_dump('QA.IN.APP1') → finds "QA.IN.APP1 | MQQMGR1 | QALIAS"
-2. Call runmqsc(qmgr_name='MQQMGR1', mqsc_command='DISPLAY QALIAS(QA.IN.APP1)') 
-   → Result shows: "TARGET('QL.IN.APP1')"
-3. Now search/query the TARGET: Call runmqsc(qmgr_name='MQQMGR1', mqsc_command='DISPLAY QLOCAL(QL.IN.APP1) CURDEPTH')
-   → Result shows: "Queue QL.IN.APP1 current depth is 85"
-4. Return: "Alias QA.IN.APP1 points to QL.IN.APP1. The target queue has current depth: 85"
-
-DON'T DO THIS:
-✗ Call search_qmgr_dump and then ask "which queue manager?"
-✗ Return alias definition and stop - always resolve to target
-✗ Ask user for confirmation before calling runmqsc
-✗ Report "no depth info" for alias - query the target queue instead
-✗ Query only MQQMGR1 when queue exists on both MQQMGR1 and MQQMGR2"""
-        
         # Multi-turn tool calling loop
         max_iterations = 10
         iteration = 0
@@ -463,92 +520,6 @@ DON'T DO THIS:
         
         print("🤖 Asking Claude...")
         
-        system_prompt = """You are an IBM MQ expert assistant. Your PRIMARY JOB is to call tools to answer user questions. Do NOT ask users for input.
-
-QUEUE NAMING CONVENTIONS - YOU MUST KNOW THESE:
-- QL* = Local Queue (e.g., QL.IN.APP1, QL.OUT.APP2)
-- QA* = Alias Queue (e.g., QA.IN.APP1 - points to another queue via TARGET)
-- QR* = Remote Queue (e.g., QR.REMOTE.Q - references queue on remote QM)
-- Others = System/Application specific queues
-
-CRITICAL HANDLING FOR ALIAS QUEUES:
-When user asks about depth of a QA* (alias) queue:
-1. Search for the alias queue to find its TARGET queue name
-2. If TARGET is a QL* queue, also search for and query that QL* queue
-3. Report BOTH: The alias → target mapping AND the actual depth of the target queue
-4. Example: User asks "depth of QA.IN.APP1"
-   - Find QA.IN.APP1 → TARGET('QL.IN.APP1')
-   - Query QL.IN.APP1 for CURDEPTH
-   - Response: "Alias QA.IN.APP1 points to QL.IN.APP1, which has current depth: 42"
-
-MANDATORY RULES - YOU MUST FOLLOW THESE:
-1. When a user asks about ANY queue, ALWAYS search for it first using search_qmgr_dump
-2. When search results show queue manager info, IMMEDIATELY extract ALL queue manager names
-3. **CRITICAL**: If a queue exists on MULTIPLE queue managers, you MUST query ALL of them
-4. NEVER ask "which queue manager?" if search results already show it
-5. ALWAYS make the next tool call in the SAME iteration - do not wait for user response
-6. If querying an ALIAS queue for depth:
-   - Query the alias to see its TARGET
-   - Then query the TARGET queue (if QL* prefix) for actual depth
-7. Queue depth MQSC commands:
-   - Local (QL*): DISPLAY QLOCAL(<QUEUE_NAME>) CURDEPTH
-   - Remote (QR*): DISPLAY QREMOTE(<QUEUE_NAME>) CURDEPTH
-   - Alias (QA*): DISPLAY QALIAS(<QUEUE_NAME>) to see TARGET
-8. Queue Status:
-   - Command: DISPLAY QSTATUS(<QUEUE_NAME>) TYPE(QUEUE) ALL
-   - Purpose: Check Open Input/Output Count (IPPROCS/OPPROCS)
-9. Cluster Queues:
-   - Command: DISPLAY QLOCAL(<QUEUE_NAME>) CLUSTER
-   - If CLUSTER attribute is NOT empty, it is a cluster queue.
-   - List ALL Queue Managers found in the initial 'search_qmgr_dump' step as hosting this cluster queue.
-10. COMPLETE THE WORKFLOW - user asks question → search → identify ALL QMs → runmqsc on EACH → return answer
-
-YOU MUST NOT:
-- Ask "which queue manager?" when search already found it
-- Stop at alias queue definition - resolve to target and get actual data
-- Wait for user input when you can call tools
-- Provide generic MQ command examples instead of actual values
-- Query only ONE queue manager when the queue exists on MULTIPLE queue managers
-
-EXAMPLE WORKFLOWS:
-
-Example 1 - Single Queue Manager:
-User: "What is the current depth of queue QL.OUT.APP3?"
-YOU MUST:
-1. Call search_qmgr_dump('QL.OUT.APP3') → finds "QL.OUT.APP3 | MQQMGR1 | QLOCAL"
-2. Call runmqsc(qmgr_name='MQQMGR1', mqsc_command='DISPLAY QLOCAL(QL.OUT.APP3) CURDEPTH')
-3. Return: "The current depth of queue QL.OUT.APP3 on MQQMGR1 is 42"
-
-Example 2 - MULTIPLE Queue Managers (CRITICAL):
-User: "What is the current depth of queue QL.IN.APP1?"
-YOU MUST:
-1. Call search_qmgr_dump('QL.IN.APP1') 
-   → Result: "Found on queue managers: MQQMGR1, MQQMGR2"
-2. Call runmqsc(qmgr_name='MQQMGR1', mqsc_command='DISPLAY QLOCAL(QL.IN.APP1) CURDEPTH')
-   → Result: "CURDEPTH(15)"
-3. Call runmqsc(qmgr_name='MQQMGR2', mqsc_command='DISPLAY QLOCAL(QL.IN.APP1) CURDEPTH')
-   → Result: "CURDEPTH(8)"
-4. Return: "Queue QL.IN.APP1 exists on multiple queue managers:
-   - MQQMGR1: current depth is 15
-   - MQQMGR2: current depth is 8"
-
-Example 3 - Alias Queue (THE KEY DIFFERENCE):
-User: "What is the current depth of queue QA.IN.APP1?"
-YOU MUST:
-1. Call search_qmgr_dump('QA.IN.APP1') → finds "QA.IN.APP1 | MQQMGR1 | QALIAS"
-2. Call runmqsc(qmgr_name='MQQMGR1', mqsc_command='DISPLAY QALIAS(QA.IN.APP1)') 
-   → Result shows: "TARGET('QL.IN.APP1')"
-3. Now search/query the TARGET: Call runmqsc(qmgr_name='MQQMGR1', mqsc_command='DISPLAY QLOCAL(QL.IN.APP1) CURDEPTH')
-   → Result shows: "Queue QL.IN.APP1 current depth is 85"
-4. Return: "Alias QA.IN.APP1 points to QL.IN.APP1. The target queue has current depth: 85"
-
-DON'T DO THIS:
-✗ Call search_qmgr_dump and then ask "which queue manager?"
-✗ Return alias definition and stop - always resolve to target
-✗ Ask user for confirmation before calling runmqsc
-✗ Report "no depth info" for alias - query the target queue instead
-✗ Query only MQQMGR1 when queue exists on both MQQMGR1 and MQQMGR2"""
-        
         # Multi-turn tool calling loop for Claude
         max_iterations = 10
         iteration = 0
@@ -561,7 +532,7 @@ DON'T DO THIS:
             response = client.messages.create(
                 model="claude-3-5-sonnet-20241022",
                 max_tokens=2048,
-                system=system_prompt,
+                system=self._SYSTEM_PROMPT,
                 tools=self.tools_anthropic,
                 messages=self.conversation_history
             )
@@ -627,7 +598,108 @@ DON'T DO THIS:
         
         # Fallback if max iterations reached
         return "❌ Maximum tool calls exceeded. Unable to complete request."
-            
+
+    async def handle_with_gemini(self, user_input: str) -> str:
+        """Use Google Gemini to handle the request"""
+        if not HAS_GEMINI:
+            return "❌ Google Generative AI library not installed. Run: pip install google-generativeai"
+
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            return "❌ GEMINI_API_KEY environment variable not set"
+
+        genai.configure(api_key=api_key)
+
+        # Build function declarations for Gemini
+        tool_declarations = [genai.protos.Tool(
+            function_declarations=[
+                genai.protos.FunctionDeclaration(
+                    name=t["name"],
+                    description=t["description"],
+                    parameters=genai.protos.Schema(
+                        type=genai.protos.Type.OBJECT,
+                        properties={
+                            k: genai.protos.Schema(
+                                type=genai.protos.Type.STRING,
+                                description=v.get("description", "")
+                            )
+                            for k, v in t["parameters"].get("properties", {}).items()
+                        },
+                        required=t["parameters"].get("required", [])
+                    ) if t["parameters"].get("properties") else genai.protos.Schema(
+                        type=genai.protos.Type.OBJECT,
+                        properties={}
+                    )
+                )
+                for t in self.tools_gemini
+            ]
+        )]
+
+        model = genai.GenerativeModel(
+            model_name="gemini-2.0-flash",
+            system_instruction=self._SYSTEM_PROMPT,
+            tools=tool_declarations
+        )
+
+        # Build history in Gemini format from conversation_history
+        gemini_history = []
+        for msg in self.conversation_history:
+            role = "user" if msg["role"] == "user" else "model"
+            if isinstance(msg["content"], str):
+                gemini_history.append({"role": role, "parts": [msg["content"]]})
+
+        chat = model.start_chat(history=gemini_history)
+
+        print("🤖 Asking Gemini...")
+
+        # Add user message to conversation history
+        self.conversation_history.append({"role": "user", "content": user_input})
+
+        # Multi-turn tool calling loop
+        max_iterations = 10
+        iteration = 0
+        current_message = user_input
+
+        while iteration < max_iterations:
+            iteration += 1
+            print(f"   [Iteration {iteration}]")
+
+            response = chat.send_message(current_message)
+            part = response.candidates[0].content.parts[0]
+
+            # Check if Gemini wants to call a function
+            if hasattr(part, 'function_call') and part.function_call.name:
+                fn = part.function_call
+                tool_name = fn.name
+                tool_args = dict(fn.args)
+
+                # Track this tool usage
+                self.tools_used.append({"name": tool_name, "args": tool_args})
+                print(f"   📞 Calling: {tool_name}({tool_args})")
+
+                # Call MCP tool
+                with MetricsTracker(logger, tool_name, {"provider": self.provider, "args": tool_args}):
+                    result = await self.session.call_tool(tool_name, tool_args)
+                tool_result = result.content[0].text
+
+                # Feed tool result back as a function response
+                current_message = genai.protos.Content(
+                    parts=[genai.protos.Part(
+                        function_response=genai.protos.FunctionResponse(
+                            name=tool_name,
+                            response={"result": tool_result}
+                        )
+                    )]
+                )
+                continue
+            else:
+                # Plain text response — we're done
+                final_message = part.text
+                self.conversation_history.append({"role": "assistant", "content": final_message})
+                return final_message
+
+        return "❌ Maximum tool calls exceeded. Unable to complete request."
+
     async def handle_user_input(self, user_input: str) -> str:
         """Handle user input using the configured LLM provider"""
         print(f"\n💬 User: {user_input}")
@@ -640,6 +712,8 @@ DON'T DO THIS:
             return await self.handle_with_openai(user_input)
         elif self.provider == "anthropic":
             return await self.handle_with_anthropic(user_input)
+        elif self.provider == "gemini":
+            return await self.handle_with_gemini(user_input)
         else:
             return f"❌ Unknown provider: {self.provider}"
             

@@ -10,7 +10,10 @@ openai>=1.12.0
 # Anthropic for Claude based tool calling
 anthropic>=0.18.0
 
-# Note: You only need to install one of the above, depending on which LLM you want to use
-# Set the appropriate API key:
+# Google Gemini for Gemini-based tool calling
+google-generativeai>=0.8.0
+
+# Note: Set the appropriate API key in .env:
 # - OPENAI_API_KEY for OpenAI
 # - ANTHROPIC_API_KEY for Anthropic
+# - GEMINI_API_KEY for Google Gemini

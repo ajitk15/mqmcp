@@ -45,19 +45,31 @@ st.set_page_config(page_title="IBM MQ AI Assistant", page_icon="🧠", layout="w
 script_dir = os.path.dirname(os.path.abspath(__file__))
 SERVER_SCRIPT = os.path.join(script_dir, "..", "server", "mqmcpserver.py")
 
-# OpenAI API Key management
+# API Key management for all providers
 if "openai_api_key" not in st.session_state:
     st.session_state.openai_api_key = os.getenv("OPENAI_API_KEY", "")
+if "anthropic_api_key" not in st.session_state:
+    st.session_state.anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "")
+if "gemini_api_key" not in st.session_state:
+    st.session_state.gemini_api_key = os.getenv("GEMINI_API_KEY", "")
+if "selected_provider" not in st.session_state:
+    st.session_state.selected_provider = "openai"
 
 async def run_llm_command(prompt, client):
-    """Execution logic for OpenAI Client - uses persistent client for conversation context"""
-    if not st.session_state.openai_api_key:
-        return None, "⚠️ OpenAI API Key is missing. Please provide it in the sidebar."
+    """Execution logic for LLM Client - uses persistent client for conversation context"""
+    provider = st.session_state.selected_provider
+    key_map = {
+        "openai": (st.session_state.openai_api_key, "OpenAI"),
+        "anthropic": (st.session_state.anthropic_api_key, "Anthropic"),
+        "gemini": (st.session_state.gemini_api_key, "Gemini"),
+    }
+    api_key, label = key_map.get(provider, ("", provider))
+    if not api_key:
+        return None, f"⚠️ {label} API Key is missing. Please provide it in the sidebar."
     
     try:
-        # Use the persistent client that maintains conversation history
         response = await client.handle_user_input(prompt)
-        tools_used = client.tools_used  # Get the tools that were called
+        tools_used = client.tools_used
         return tools_used, response
     except Exception as e:
         import traceback
@@ -66,16 +78,16 @@ async def run_llm_command(prompt, client):
         return None, error_msg
 
 @st.cache_resource
-def get_llm_client():
-    """Get or create a persistent LLM client that maintains conversation history"""
+def get_llm_client(provider="openai"):
+    """Get or create a persistent LLM client for the given provider"""
     script_dir = os.path.dirname(os.path.abspath(__file__))
     server_script = os.path.join(script_dir, "..", "server", "mqmcpserver.py")
-    return LLMToolCaller(server_script=server_script, provider="openai")
+    return LLMToolCaller(server_script=server_script, provider=provider)
 
 @st.cache_resource
-def initialize_client():
-    """Initialize client connection"""
-    client = get_llm_client()
+def initialize_client(provider="openai"):
+    """Initialize client connection for a given provider"""
+    client = get_llm_client(provider)
     loop = get_event_loop()
     try:
         loop.run_until_complete(client.connect())
@@ -95,7 +107,9 @@ def get_event_loop():
     return loop
 
 # Connectivity Check logic (Shared with LLM for status)
-mcp_status_html = '<span style="color: #ccffcc;">🟢 AI Model Ready</span>'
+PROVIDER_LABELS = {"openai": "GPT-4", "anthropic": "Claude", "gemini": "Gemini 1.5"}
+provider_name = PROVIDER_LABELS.get(st.session_state.selected_provider, "AI")
+mcp_status_html = f'<span style="color: #ccffcc;">🟢 {provider_name} Ready</span>'
 
 # CUSTOM CSS & GLOBAL UI COMPONENTS
 st.markdown(f"""
@@ -216,20 +230,54 @@ st.markdown("""
 
 with st.sidebar:
     st.header("🔑 Configuration")
-    api_key = st.text_input("OpenAI API Key", type="password", value=st.session_state.openai_api_key)
-    if api_key:
-        st.session_state.openai_api_key = api_key
-        os.environ["OPENAI_API_KEY"] = api_key
-    else:
-        st.warning("Please enter your OpenAI API Key to enable the AI.")
-    
+
+    # Provider selector
+    provider_choice = st.radio(
+        "AI Provider",
+        options=["openai", "anthropic", "gemini"],
+        format_func=lambda x: {"openai": "🧠 OpenAI (GPT-4)", "anthropic": "🐤 Anthropic (Claude)", "gemini": "✨ Google (Gemini)"}[x],
+        index=["openai", "anthropic", "gemini"].index(st.session_state.selected_provider)
+    )
+
+    # If provider changed, reset the client so it's recreated with new provider
+    if provider_choice != st.session_state.selected_provider:
+        st.session_state.selected_provider = provider_choice
+        st.session_state.pop("llm_client", None)
+        st.session_state.client_ready = False
+        st.rerun()
+
+    st.divider()
+
+    # Show relevant API key input
+    if provider_choice == "openai":
+        api_key = st.text_input("🔑 OpenAI API Key", type="password", value=st.session_state.openai_api_key)
+        if api_key:
+            st.session_state.openai_api_key = api_key
+            os.environ["OPENAI_API_KEY"] = api_key
+        else:
+            st.warning("Please enter your OpenAI API Key.")
+    elif provider_choice == "anthropic":
+        api_key = st.text_input("🔑 Anthropic API Key", type="password", value=st.session_state.anthropic_api_key)
+        if api_key:
+            st.session_state.anthropic_api_key = api_key
+            os.environ["ANTHROPIC_API_KEY"] = api_key
+        else:
+            st.warning("Please enter your Anthropic API Key.")
+    elif provider_choice == "gemini":
+        api_key = st.text_input("🔑 Gemini API Key", type="password", value=st.session_state.gemini_api_key)
+        if api_key:
+            st.session_state.gemini_api_key = api_key
+            os.environ["GEMINI_API_KEY"] = api_key
+        else:
+            st.warning("Please enter your Gemini API Key.")
+
     st.divider()
     st.markdown("### 🛠️ Environment")
     st.code(f"Server: mqmcpserver.py", language="text")
 
 # Initialize persistent client on page load
 if "llm_client" not in st.session_state:
-    st.session_state.llm_client = initialize_client()
+    st.session_state.llm_client = initialize_client(st.session_state.selected_provider)
     st.session_state.client_ready = st.session_state.llm_client is not None
 
 # Chat interface initialization
@@ -266,8 +314,16 @@ for message in st.session_state.messages_llm:
 
 # User input
 if prompt := st.chat_input("Ask something about IBM MQ..."):
-    if not st.session_state.openai_api_key:
-        st.error("Please provide an OpenAI API Key in the sidebar.")
+    provider = st.session_state.selected_provider
+    key_map = {
+        "openai": st.session_state.openai_api_key,
+        "anthropic": st.session_state.anthropic_api_key,
+        "gemini": st.session_state.gemini_api_key,
+    }
+    active_key = key_map.get(provider, "")
+    if not active_key:
+        provider_label = {"openai": "OpenAI", "anthropic": "Anthropic", "gemini": "Gemini"}.get(provider, provider)
+        st.error(f"Please provide a {provider_label} API Key in the sidebar.")
     elif not st.session_state.client_ready:
         st.error("MCP client is not ready. Please refresh the page.")
     else:

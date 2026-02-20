@@ -9,11 +9,29 @@ import streamlit as st
 import asyncio
 import os
 import json
-from openai import OpenAI
-from mcp import ClientSession
-from mcp.client.sse import sse_client
 from dotenv import load_dotenv
 from tool_logger import get_rest_api_url, should_show_logging
+
+try:
+    from openai import OpenAI
+    HAS_OPENAI = True
+except ImportError:
+    HAS_OPENAI = False
+
+try:
+    import anthropic as anthropic_sdk
+    HAS_ANTHROPIC = True
+except ImportError:
+    HAS_ANTHROPIC = False
+
+try:
+    import google.generativeai as genai
+    HAS_GEMINI = True
+except ImportError:
+    HAS_GEMINI = False
+
+from mcp import ClientSession
+from mcp.client.sse import sse_client
 
 # Load environment variables
 load_dotenv()
@@ -26,6 +44,12 @@ if "mcp_endpoint" not in st.session_state:
     st.session_state.mcp_endpoint = "http://localhost:5000/sse"
 if "openai_api_key" not in st.session_state:
     st.session_state.openai_api_key = os.getenv("OPENAI_API_KEY", "")
+if "anthropic_api_key" not in st.session_state:
+    st.session_state.anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "")
+if "gemini_api_key" not in st.session_state:
+    st.session_state.gemini_api_key = os.getenv("GEMINI_API_KEY", "")
+if "selected_provider" not in st.session_state:
+    st.session_state.selected_provider = "openai"
 if "connection_status" not in st.session_state:
     st.session_state.connection_status = "unknown"
 if "messages_remote" not in st.session_state:
@@ -74,9 +98,7 @@ def convert_mcp_tools_to_openai_schema(mcp_tools):
     """Convert MCP tools to OpenAI function calling schema"""
     openai_tools = []
     for tool in mcp_tools:
-        # Build parameter schema from inputSchema
         parameters = tool.inputSchema if hasattr(tool, 'inputSchema') and tool.inputSchema else {"type": "object", "properties": {}}
-        
         openai_tools.append({
             "type": "function",
             "function": {
@@ -87,23 +109,234 @@ def convert_mcp_tools_to_openai_schema(mcp_tools):
         })
     return openai_tools
 
+def convert_mcp_tools_to_anthropic_schema(mcp_tools):
+    """Convert MCP tools to Anthropic tool calling schema"""
+    anthropic_tools = []
+    for tool in mcp_tools:
+        input_schema = tool.inputSchema if hasattr(tool, 'inputSchema') and tool.inputSchema else {"type": "object", "properties": {}}
+        anthropic_tools.append({
+            "name": tool.name,
+            "description": tool.description or f"Execute {tool.name}",
+            "input_schema": input_schema
+        })
+    return anthropic_tools
+
+def convert_mcp_tools_to_gemini_declarations(mcp_tools):
+    """Convert MCP tools to Gemini FunctionDeclaration list"""
+    declarations = []
+    for tool in mcp_tools:
+        schema = tool.inputSchema if hasattr(tool, 'inputSchema') and tool.inputSchema else {}
+        props = schema.get("properties", {})
+        required = schema.get("required", [])
+        declarations.append(
+            genai.protos.FunctionDeclaration(
+                name=tool.name,
+                description=tool.description or f"Execute {tool.name}",
+                parameters=genai.protos.Schema(
+                    type=genai.protos.Type.OBJECT,
+                    properties={
+                        k: genai.protos.Schema(
+                            type=genai.protos.Type.STRING,
+                            description=v.get("description", "") if isinstance(v, dict) else ""
+                        )
+                        for k, v in props.items()
+                    },
+                    required=required
+                ) if props else genai.protos.Schema(type=genai.protos.Type.OBJECT, properties={})
+            )
+        )
+    return declarations
+
 async def handle_ai_conversation(user_message, endpoint, api_key):
     """Handle conversation with OpenAI and execute tool calls"""
     if not api_key:
         return None, "Please provide an OpenAI API key in the sidebar."
+    if not HAS_OPENAI:
+        return None, "❌ openai library not installed."
     
     # Get available MCP tools
     if not st.session_state.mcp_tools:
         st.session_state.mcp_tools = await get_mcp_tools(endpoint)
-    
     if not st.session_state.mcp_tools:
         return None, "No MCP tools available. Check your MCP endpoint."
     
-    # Convert to OpenAI schema
     openai_tools = convert_mcp_tools_to_openai_schema(st.session_state.mcp_tools)
     
-    # Build conversation history
-    system_prompt = """You are an IBM MQ expert assistant. Your PRIMARY JOB is to call tools to answer user questions. Do NOT ask users for input.
+    system_prompt = _get_system_prompt()
+    messages = [{"role": "system", "content": system_prompt}]
+    for msg in st.session_state.messages_remote[-10:]:
+        messages.append({"role": msg["role"], "content": msg["content"]})
+    messages.append({"role": "user", "content": user_message})
+    
+    try:
+        client = OpenAI(api_key=api_key)
+        tools_used = []
+        
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=messages,
+            tools=openai_tools,
+            tool_choice="auto"
+        )
+        response_message = response.choices[0].message
+        
+        while response_message.tool_calls:
+            messages.append(response_message)
+            for tool_call in response_message.tool_calls:
+                function_name = tool_call.function.name
+                function_args = json.loads(tool_call.function.arguments)
+                tools_used.append({"name": function_name, "args": function_args})
+                tool_result = await call_mcp_tool(endpoint, function_name, function_args)
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "name": function_name,
+                    "content": tool_result
+                })
+            response = client.chat.completions.create(
+                model="gpt-4",
+                messages=messages,
+                tools=openai_tools,
+                tool_choice="auto"
+            )
+            response_message = response.choices[0].message
+        
+        return tools_used, response_message.content
+    except Exception as e:
+        import traceback
+        return None, f"❌ Error: {str(e)}\n\n{traceback.format_exc()}"
+
+
+async def handle_ai_conversation_anthropic(user_message, endpoint, api_key):
+    """Handle conversation with Anthropic Claude and execute tool calls via SSE"""
+    if not api_key:
+        return None, "Please provide an Anthropic API key in the sidebar."
+    if not HAS_ANTHROPIC:
+        return None, "❌ anthropic library not installed. Run: pip install anthropic"
+
+    if not st.session_state.mcp_tools:
+        st.session_state.mcp_tools = await get_mcp_tools(endpoint)
+    if not st.session_state.mcp_tools:
+        return None, "No MCP tools available. Check your MCP endpoint."
+
+    anthropic_tools = convert_mcp_tools_to_anthropic_schema(st.session_state.mcp_tools)
+    system_prompt = _get_system_prompt()
+
+    # Build history — Anthropic uses user/assistant roles only
+    history = []
+    for msg in st.session_state.messages_remote[-10:]:
+        if msg["role"] in ("user", "assistant") and isinstance(msg["content"], str):
+            history.append({"role": msg["role"], "content": msg["content"]})
+    history.append({"role": "user", "content": user_message})
+
+    try:
+        client = anthropic_sdk.Anthropic(api_key=api_key)
+        tools_used = []
+        max_iterations = 10
+
+        for _ in range(max_iterations):
+            response = client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=2048,
+                system=system_prompt,
+                tools=anthropic_tools,
+                messages=history
+            )
+
+            has_tool_use = any(b.type == "tool_use" for b in response.content)
+            if not has_tool_use:
+                final_text = next((b.text for b in response.content if hasattr(b, "text")), "")
+                return tools_used, final_text
+
+            # Append assistant turn
+            history.append({"role": "assistant", "content": response.content})
+
+            tool_results = []
+            for block in response.content:
+                if block.type == "tool_use":
+                    tools_used.append({"name": block.name, "args": block.input})
+                    tool_result = await call_mcp_tool(endpoint, block.name, block.input)
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": tool_result
+                    })
+            history.append({"role": "user", "content": tool_results})
+
+        return tools_used, "❌ Max tool calls exceeded."
+    except Exception as e:
+        import traceback
+        return None, f"❌ Error: {str(e)}\n\n{traceback.format_exc()}"
+
+
+async def handle_ai_conversation_gemini(user_message, endpoint, api_key):
+    """Handle conversation with Google Gemini and execute tool calls via SSE"""
+    if not api_key:
+        return None, "Please provide a Gemini API key in the sidebar."
+    if not HAS_GEMINI:
+        return None, "❌ google-generativeai library not installed. Run: pip install google-generativeai"
+
+    if not st.session_state.mcp_tools:
+        st.session_state.mcp_tools = await get_mcp_tools(endpoint)
+    if not st.session_state.mcp_tools:
+        return None, "No MCP tools available. Check your MCP endpoint."
+
+    genai.configure(api_key=api_key)
+    declarations = convert_mcp_tools_to_gemini_declarations(st.session_state.mcp_tools)
+    tool_declarations = [genai.protos.Tool(function_declarations=declarations)]
+    system_prompt = _get_system_prompt()
+
+    model = genai.GenerativeModel(
+        model_name="gemini-2.0-flash",
+        system_instruction=system_prompt,
+        tools=tool_declarations
+    )
+
+    # Build prior history (text only)
+    gemini_history = []
+    for msg in st.session_state.messages_remote[-10:]:
+        if msg["role"] in ("user", "assistant") and isinstance(msg["content"], str):
+            role = "user" if msg["role"] == "user" else "model"
+            gemini_history.append({"role": role, "parts": [msg["content"]]})
+
+    chat = model.start_chat(history=gemini_history)
+
+    try:
+        tools_used = []
+        current_message = user_message
+        max_iterations = 10
+
+        for _ in range(max_iterations):
+            response = chat.send_message(current_message)
+            part = response.candidates[0].content.parts[0]
+
+            if hasattr(part, 'function_call') and part.function_call.name:
+                fn = part.function_call
+                tool_name = fn.name
+                tool_args = dict(fn.args)
+                tools_used.append({"name": tool_name, "args": tool_args})
+                tool_result = await call_mcp_tool(endpoint, tool_name, tool_args)
+
+                current_message = genai.protos.Content(
+                    parts=[genai.protos.Part(
+                        function_response=genai.protos.FunctionResponse(
+                            name=tool_name,
+                            response={"result": tool_result}
+                        )
+                    )]
+                )
+            else:
+                return tools_used, part.text
+
+        return tools_used, "❌ Max tool calls exceeded."
+    except Exception as e:
+        import traceback
+        return None, f"❌ Error: {str(e)}\n\n{traceback.format_exc()}"
+
+
+def _get_system_prompt() -> str:
+    """Shared system prompt for all providers"""
+    return """You are an IBM MQ expert assistant. Your PRIMARY JOB is to call tools to answer user questions. Do NOT ask users for input.
 
 QUEUE NAMING CONVENTIONS - YOU MUST KNOW THESE:
 - QL* = Local Queue (e.g., QL.IN.APP1, QL.OUT.APP2)
@@ -126,99 +359,7 @@ MANDATORY RULES - YOU MUST FOLLOW THESE:
 YOU MUST NOT:
 - Ask "which queue manager?" when search already found it
 - Wait for user input when you can call tools
-- Query only ONE queue manager when the queue exists on MULTIPLE queue managers
-
-EXAMPLE WORKFLOWS:
-
-Example 1 - Single Queue Manager:
-User: "What is the current depth of queue QL.OUT.APP3?"
-YOU MUST:
-1. Call search_qmgr_dump('QL.OUT.APP3') → finds "QL.OUT.APP3 | MQQMGR1 | QLOCAL"
-2. Call runmqsc(qmgr_name='MQQMGR1', mqsc_command='DISPLAY QLOCAL(QL.OUT.APP3) CURDEPTH')
-3. Return: "The current depth of queue QL.OUT.APP3 on MQQMGR1 is 42"
-
-Example 2 - MULTIPLE Queue Managers (CRITICAL):
-User: "What is the current depth of queue QL.IN.APP1?"
-YOU MUST:
-1. Call search_qmgr_dump('QL.IN.APP1') 
-   → Result: "Found on queue managers: MQQMGR1, MQQMGR2"
-2. Call runmqsc(qmgr_name='MQQMGR1', mqsc_command='DISPLAY QLOCAL(QL.IN.APP1) CURDEPTH')
-   → Result: "CURDEPTH(15)"
-3. Call runmqsc(qmgr_name='MQQMGR2', mqsc_command='DISPLAY QLOCAL(QL.IN.APP1) CURDEPTH')
-   → Result: "CURDEPTH(8)"
-4. Return: "Queue QL.IN.APP1 exists on multiple queue managers:
-   - MQQMGR1: current depth is 15
-   - MQQMGR2: current depth is 8"
-
-DON'T DO THIS:
-✗ Call search_qmgr_dump and then ask "which queue manager?"
-✗ Query only MQQMGR1 when queue exists on both MQQMGR1 and MQQMGR2"""
-    
-    messages = [
-        {"role": "system", "content": system_prompt}
-    ]
-    
-    # Add chat history (limit to last 10 messages to avoid token limits)
-    for msg in st.session_state.messages_remote[-10:]:
-        messages.append({"role": msg["role"], "content": msg["content"]})
-    
-    # Add current user message
-    messages.append({"role": "user", "content": user_message})
-    
-    try:
-        client = OpenAI(api_key=api_key)
-        tools_used = []
-        
-        # Initial API call
-        response = client.chat.completions.create(
-            model="gpt-4",
-            messages=messages,
-            tools=openai_tools,
-            tool_choice="auto"
-        )
-        
-        response_message = response.choices[0].message
-        
-        # Handle tool calls
-        while response_message.tool_calls:
-            messages.append(response_message)
-            
-            for tool_call in response_message.tool_calls:
-                function_name = tool_call.function.name
-                function_args = json.loads(tool_call.function.arguments)
-                
-                # Record tool usage
-                tools_used.append({
-                    "name": function_name,
-                    "args": function_args
-                })
-                
-                # Call the MCP tool
-                tool_result = await call_mcp_tool(endpoint, function_name, function_args)
-                
-                # Add tool response to messages
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "name": function_name,
-                    "content": tool_result
-                })
-            
-            # Get next response from OpenAI
-            response = client.chat.completions.create(
-                model="gpt-4",
-                messages=messages,
-                tools=openai_tools,
-                tool_choice="auto"
-            )
-            response_message = response.choices[0].message
-        
-        # Return final response
-        return tools_used, response_message.content
-        
-    except Exception as e:
-        import traceback
-        return None, f"❌ Error: {str(e)}\n\n{traceback.format_exc()}"
+- Query only ONE queue manager when the queue exists on MULTIPLE queue managers"""
 
 # CUSTOM CSS & GLOBAL UI COMPONENTS
 st.markdown(f"""
@@ -357,7 +498,6 @@ with st.sidebar:
             if success:
                 st.session_state.connection_status = "connected"
                 st.success(f"✅ {message}")
-                # Load tools
                 st.session_state.mcp_tools = asyncio.run(get_mcp_tools(st.session_state.mcp_endpoint))
                 st.info(f"Loaded {len(st.session_state.mcp_tools)} tools")
             else:
@@ -365,15 +505,41 @@ with st.sidebar:
                 st.error(f"❌ Connection failed: {message}")
     
     st.divider()
-    st.header("🔑 OpenAI API Key")
-    
-    api_key = st.text_input("API Key", type="password", value=st.session_state.openai_api_key)
-    if api_key:
-        st.session_state.openai_api_key = api_key
-        os.environ["OPENAI_API_KEY"] = api_key
-    else:
-        st.warning("Please enter your OpenAI API Key.")
-    
+    st.header("🔑 AI Provider")
+
+    provider_choice = st.radio(
+        "Select Provider",
+        options=["openai", "anthropic", "gemini"],
+        format_func=lambda x: {"openai": "🧠 OpenAI (GPT-4)", "anthropic": "🐤 Anthropic (Claude)", "gemini": "✨ Google (Gemini)"}[x],
+        index=["openai", "anthropic", "gemini"].index(st.session_state.selected_provider)
+    )
+    if provider_choice != st.session_state.selected_provider:
+        st.session_state.selected_provider = provider_choice
+        st.rerun()
+
+    st.divider()
+    if provider_choice == "openai":
+        api_key = st.text_input("🔑 OpenAI API Key", type="password", value=st.session_state.openai_api_key)
+        if api_key:
+            st.session_state.openai_api_key = api_key
+            os.environ["OPENAI_API_KEY"] = api_key
+        else:
+            st.warning("Please enter your OpenAI API Key.")
+    elif provider_choice == "anthropic":
+        api_key = st.text_input("🔑 Anthropic API Key", type="password", value=st.session_state.anthropic_api_key)
+        if api_key:
+            st.session_state.anthropic_api_key = api_key
+            os.environ["ANTHROPIC_API_KEY"] = api_key
+        else:
+            st.warning("Please enter your Anthropic API Key.")
+    elif provider_choice == "gemini":
+        api_key = st.text_input("🔑 Gemini API Key", type="password", value=st.session_state.gemini_api_key)
+        if api_key:
+            st.session_state.gemini_api_key = api_key
+            os.environ["GEMINI_API_KEY"] = api_key
+        else:
+            st.warning("Please enter your Gemini API Key.")
+
     st.divider()
     st.markdown("### 📊 Status")
     st.code(f"Endpoint: {st.session_state.mcp_endpoint}", language="text")
@@ -403,8 +569,17 @@ for message in st.session_state.messages_remote:
 
 # User input
 if prompt := st.chat_input("Ask something about IBM MQ..."):
-    if not st.session_state.openai_api_key:
-        st.error("Please provide an OpenAI API Key in the sidebar.")
+    provider = st.session_state.selected_provider
+    key_map = {
+        "openai": st.session_state.openai_api_key,
+        "anthropic": st.session_state.anthropic_api_key,
+        "gemini": st.session_state.gemini_api_key,
+    }
+    active_key = key_map.get(provider, "")
+    provider_label = {"openai": "OpenAI", "anthropic": "Anthropic", "gemini": "Gemini"}.get(provider, provider)
+
+    if not active_key:
+        st.error(f"Please provide a {provider_label} API Key in the sidebar.")
     elif st.session_state.connection_status != "connected":
         st.warning("Please test the connection to your MCP endpoint first.")
     else:
@@ -427,11 +602,18 @@ if prompt := st.chat_input("Ask something about IBM MQ..."):
             """, unsafe_allow_html=True)
             
             try:
+                provider = st.session_state.selected_provider
+                handler_map = {
+                    "openai": (handle_ai_conversation, st.session_state.openai_api_key),
+                    "anthropic": (handle_ai_conversation_anthropic, st.session_state.anthropic_api_key),
+                    "gemini": (handle_ai_conversation_gemini, st.session_state.gemini_api_key),
+                }
+                handler, active_key = handler_map[provider]
                 tools_used, full_response = asyncio.run(
-                    handle_ai_conversation(
+                    handler(
                         prompt, 
                         st.session_state.mcp_endpoint,
-                        st.session_state.openai_api_key
+                        active_key
                     )
                 )
             except Exception as e:

@@ -1,36 +1,12 @@
 import streamlit as st
 import asyncio
-import requests
 from mcp import ClientSession
 from mcp.client.sse import sse_client
 from dotenv import load_dotenv
 from tool_logger import get_rest_api_url, should_show_logging
 
 # Load environment variables
-# Load environment variables
 load_dotenv()
-
-# Cleanup handler for graceful shutdown
-def cleanup_on_exit():
-    """Cleanup resources on exit - non-blocking"""
-    import threading
-    
-    def do_cleanup():
-        try:
-            if hasattr(st, 'session_state'):
-                for key in list(st.session_state.keys()):
-                    # Clear session state objects if needed
-                    pass
-        except:
-            pass
-    
-    # Run cleanup in background thread (daemon)
-    t = threading.Thread(target=do_cleanup, daemon=True)
-    t.start()
-    t.join(timeout=1)
-
-import atexit
-atexit.register(cleanup_on_exit)
 
 # Set up page config
 st.set_page_config(page_title="IBM MQ MCP Client (SSE)", page_icon="⚡", layout="wide")
@@ -70,7 +46,7 @@ OPERATIONS = {
     },
     "Check Queue Depth": {
         "smart_workflow": "check_depth",
-        "tool": "runmqsc", # Placeholder, logic handled in smart_workflow
+        "tool": "runmqsc",  # Placeholder, logic handled in smart_workflow
         "args": {"queue_name": "Queue Name"},
         "description": "Auto-locate queue and check current number of messages (CURDEPTH)."
     },
@@ -93,7 +69,7 @@ OPERATIONS = {
         "mqsc_template": "DISPLAY CHSTATUS({channel_name})",
         "description": "Check if a specific channel is RUNNING, BINDING, or INACTIVE."
     },
-     "--- Custom ---": {"header": True},
+    "--- Custom ---": {"header": True},
     "Run Custom MQSC Command": {
         "tool": "runmqsc",
         "args": {"qmgr_name": "Queue Manager Name", "mqsc_command": "MQSC Command"},
@@ -106,6 +82,11 @@ OPERATIONS = {
         "description": "Search across all Queue Managers to find where a Queue or Channel exists."
     }
 }
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 async def call_mcp_tool(server_url, tool_name, arguments):
     """Connect to SSE and call a specific tool"""
@@ -120,16 +101,14 @@ async def call_mcp_tool(server_url, tool_name, arguments):
     except Exception as e:
         # Handle ExceptionGroups (TaskGroup errors)
         if hasattr(e, 'exceptions'):
-            error_msgs = []
-            for ex in e.exceptions:
-                error_msgs.append(str(ex))
+            error_msgs = [str(ex) for ex in e.exceptions]
             return f"❌ Error: {'; '.join(error_msgs)}"
         return f"❌ Error: {str(e)}"
+
 
 async def check_connection(server_url):
     """Check if we can connect to the SSE endpoint"""
     try:
-        # Just try to initialize a session to verify connection
         async with sse_client(server_url) as streams:
             async with ClientSession(streams[0], streams[1]) as session:
                 await session.initialize()
@@ -138,10 +117,10 @@ async def check_connection(server_url):
         print(f"Connection check failed: {e}")
         return False
 
+
 def extract_qmgrs_from_search(search_output: str) -> list:
     """Parse search_qmgr_dump output to find queue manager names"""
     import re
-    # Look for lines like "Queue Manager: QM1 | ..."
     qmgrs = set()
     for line in search_output.split('\n'):
         match = re.search(r'Queue Manager:\s*([A-Z0-9_\.]+)', line, re.IGNORECASE)
@@ -149,7 +128,53 @@ def extract_qmgrs_from_search(search_output: str) -> list:
             qmgrs.add(match.group(1).strip())
     return list(qmgrs)
 
+
+def render_tool_call(tool_name: str, args: dict, result: str, expanded: bool = True, label: str = ""):
+    """Render a standardised 'Tool Called' expander block.
+    
+    tool_name  - actual MCP tool name, used for REST API URL lookup
+    label      - optional display title override (e.g. 'runmqsc on MQQMGR1')
+    """
+    display = label or tool_name
+    with st.expander(f"🔧 Tool Called: `{display}`", expanded=expanded):
+        st.markdown(f"**Tool:** `{tool_name}`")
+        st.json(args)
+        if should_show_logging():
+            st.code(get_rest_api_url(tool_name, args), language="text")
+        st.markdown("**Output:**")
+        if "❌ Error" in result:
+            st.error(result)
+        else:
+            st.code(result, language="text")
+
+
+def detect_queue_type(queue_name: str) -> tuple[str, str, str]:
+    """
+    Return (queue_type_label, icon, mqsc_command_template) for the given queue name.
+    Queue name should already be normalised (stripped + uppercased).
+    """
+    if queue_name.startswith("QR"):
+        return (
+            "Remote Queue", "🌐",
+            "DISPLAY QREMOTE({queue})"
+        )
+    elif queue_name.startswith("QA"):
+        return (
+            "Alias Queue", "🔀",
+            "DISPLAY QALIAS({queue})"   # reveals TARGET
+        )
+    else:
+        label = "Local Queue" if queue_name.startswith("QL") else "Queue"
+        return (
+            label, "📦",
+            "DISPLAY QLOCAL({queue}) CURDEPTH"
+        )
+
+
+# ---------------------------------------------------------------------------
 # CUSTOM CSS
+# ---------------------------------------------------------------------------
+
 st.markdown("""
 <style>
     .stApp { background-color: #ffffff; color: #333333; }
@@ -191,7 +216,10 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 
-# --- Connection Settings (Moved to Main Page) ---
+# ---------------------------------------------------------------------------
+# Connection Settings
+# ---------------------------------------------------------------------------
+
 with st.expander("🔌 Connection Settings", expanded=True):
     col1, col2 = st.columns([3, 1])
     with col1:
@@ -199,9 +227,8 @@ with st.expander("🔌 Connection Settings", expanded=True):
         if server_url != st.session_state.server_url:
             st.session_state.server_url = server_url
             st.rerun()
-            
     with col2:
-        st.markdown("<br>", unsafe_allow_html=True) # Spacer
+        st.markdown("<br>", unsafe_allow_html=True)
         if st.button("Check Connectivity"):
             with st.spinner("Connecting..."):
                 is_connected = asyncio.run(check_connection(st.session_state.server_url))
@@ -215,7 +242,7 @@ with st.expander("🔌 Connection Settings", expanded=True):
 # Main Operation Selection
 st.markdown("""
 <div style="background-color: #e8f5e9; border-left: 5px solid #4C8C2B; padding: 15px; border-radius: 8px; margin-bottom: 25px;">
-    <span style="color: #2e7d32; font-weight: 600;">Direct Control Mode:</span> 
+    <span style="color: #2e7d32; font-weight: 600;">Direct Control Mode:</span>
     <span style="color: #555555;">Execute MCP tools directly without AI interpretation.</span>
 </div>
 """, unsafe_allow_html=True)
@@ -226,119 +253,91 @@ choice = st.selectbox("Select Tool / Operation", valid_ops)
 if choice and choice != "Select an operation...":
     op_config = OPERATIONS[choice]
     st.info(f"💡 {op_config['description']}")
-    
+
     # Dynamic Inputs
     tool_args = {}
     if op_config.get("args"):
-        # We need to collect inputs
         cols = st.columns(len(op_config["args"]))
         for i, (arg_key, label) in enumerate(op_config["args"].items()):
             with cols[i]:
                 tool_args[arg_key] = st.text_input(label, key=f"{choice}_{arg_key}")
-    
+
     st.markdown("<br>", unsafe_allow_html=True)
-    
+
     if st.button("🚀 Execute Command", type="primary"):
-        # Check params
+        # Validate required params
         missing_params = [k for k, v in tool_args.items() if not v]
         if missing_params:
             st.error(f"⚠️ Missing required parameters: {', '.join(missing_params)}")
         else:
             # Prepare final arguments
             final_args = tool_args.copy()
-            
-            # Handle fixed args (merged in)
+
+            # Merge fixed args
             if "fixed_args" in op_config:
                 final_args.update(op_config["fixed_args"])
-            
-            # Handle templates (e.g. constructing mqsc_command from parts)
+
+            # Apply mqsc_template (constructs mqsc_command from user inputs)
             if "mqsc_template" in op_config:
                 try:
                     cmd = op_config["mqsc_template"].format(**tool_args)
                     final_args["mqsc_command"] = cmd
-                    valid_tool_keys = ["qmgr_name", "mqsc_command"]
-                    final_args = {k: v for k, v in final_args.items() if k in valid_tool_keys}
-                    
+                    final_args = {k: v for k, v in final_args.items() if k in ("qmgr_name", "mqsc_command")}
                 except KeyError as e:
                     st.error(f"Template error: Missing {e}")
                     st.stop()
-            
+
             # --- Smart Workflow Execution ---
             if "smart_workflow" in op_config:
                 workflow_type = op_config["smart_workflow"]
-                
+
                 if workflow_type in ["check_depth", "check_status"]:
-                    queue_name = tool_args.get("queue_name")
+                    # Normalise: strip whitespace and uppercase to make prefix detection reliable
+                    queue_name = tool_args.get("queue_name", "").strip().upper()
 
-                    # --- Queue type detection by prefix ---
                     if workflow_type == "check_depth":
-                        q_upper = queue_name.upper()
-                        if q_upper.startswith("QR"):
-                            queue_type = "Remote Queue"
-                            queue_type_icon = "🌐"
-                            command_template = "DISPLAY QREMOTE({queue}) RQMNAME RNAME XMITQ"
-                        elif q_upper.startswith("QA"):
-                            queue_type = "Alias Queue"
-                            queue_type_icon = "🔀"
-                            command_template = "DISPLAY QALIAS({queue})"  # shows TARGET
-                        else:
-                            queue_type = "Local Queue" if q_upper.startswith("QL") else "Queue"
-                            queue_type_icon = "📦"
-                            command_template = "DISPLAY QLOCAL({queue}) CURDEPTH"
-
+                        queue_type, queue_type_icon, command_template = detect_queue_type(queue_name)
                         st.info(f"{queue_type_icon} **Queue Type Detected:** `{queue_name}` is identified as a **{queue_type}** based on its prefix.")
+
+                        # Remote queues don't store CURDEPTH — explain the limitation
+                        if queue_type == "Remote Queue":
+                            st.warning(
+                                "ℹ️ **Note:** Remote queues don't hold messages locally. "
+                                "`DISPLAY QREMOTE` shows routing info (RQMNAME, RNAME, XMITQ). "
+                                "To see actual depth, check the transmission queue (XMITQ) on this QMGR, "
+                                "or query CURDEPTH on the target queue manager."
+                            )
                     else:
                         command_template = "DISPLAY QSTATUS({queue}) TYPE(QUEUE) ALL"
 
-                    
                     with st.spinner(f"🔍 Searching for {queue_name}..."):
                         # Step 1: Search
                         search_args = {"search_string": queue_name}
                         search_res = asyncio.run(call_mcp_tool(st.session_state.server_url, "search_qmgr_dump", search_args))
-                        with st.expander("🔧 Tool Called: `search_qmgr_dump`", expanded=True):
-                            st.markdown("**Tool:** `search_qmgr_dump`")
-                            st.json(search_args)
-                            if should_show_logging():
-                                st.code(get_rest_api_url("search_qmgr_dump", search_args), language="text")
-                            st.markdown("**Output:**")
-                            st.code(search_res, language="text")
-                        
+                        render_tool_call("search_qmgr_dump", search_args, search_res)
+
                         # Step 2: Parse QMGRs
                         qmgrs = extract_qmgrs_from_search(search_res)
-                        
+
                         if not qmgrs:
                             st.warning(f"Could not find queue '{queue_name}' on any known queue manager.")
                         else:
                             st.success(f"Found on {len(qmgrs)} Queue Manager(s): {', '.join(qmgrs)}")
-                            
-                            # Step 3: Check Depth/Status on each
+
+                            # Step 3: Run MQSC on each QMGR
                             for qmgr in qmgrs:
                                 cmd = command_template.format(queue=queue_name)
                                 runmqsc_args = {"qmgr_name": qmgr, "mqsc_command": cmd}
                                 with st.spinner(f"Running runmqsc on {qmgr}..."):
                                     res = asyncio.run(call_mcp_tool(st.session_state.server_url, "runmqsc", runmqsc_args))
-                                with st.expander(f"🔧 Tool Called: `runmqsc` on {qmgr}", expanded=True):
-                                    st.markdown("**Tool:** `runmqsc`")
-                                    st.json(runmqsc_args)
-                                    if should_show_logging():
-                                        st.code(get_rest_api_url("runmqsc", runmqsc_args), language="text")
-                                    st.markdown("**Output:**")
-                                    st.code(res, language="text")
-                st.stop() # End execution after smart workflow
+                                render_tool_call("runmqsc", runmqsc_args, res, label=f"runmqsc on {qmgr}")
 
-            # Execute standard tool
+                st.stop()  # End execution after smart workflow
+
+            # Standard tool execution
             with st.spinner(f"Running {op_config['tool']}..."):
                 result = asyncio.run(call_mcp_tool(st.session_state.server_url, op_config["tool"], final_args))
-            
-            with st.expander(f"🔧 Tool Called: `{op_config['tool']}`", expanded=True):
-                st.markdown(f"**Tool:** `{op_config['tool']}`")
-                st.json(final_args)
-                if should_show_logging():
-                    st.code(get_rest_api_url(op_config["tool"], final_args), language="text")
-                st.markdown("**Output:**")
-                if "❌ Error" in result:
-                    st.error(result)
-                else:
-                    st.success("Command Executed Successfully")
-                    st.code(result, language="text")
 
+            render_tool_call(op_config["tool"], final_args, result)
+            if "❌ Error" not in result:
+                st.success("Command Executed Successfully")

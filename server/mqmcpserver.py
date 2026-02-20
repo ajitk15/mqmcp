@@ -12,345 +12,349 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import logging
-import httpx
-import json
-import sys
+
 import asyncio
-
+import json
+import logging
 import os
-from typing import Any
-from mcp.server.fastmcp import FastMCP
-from dotenv import load_dotenv
-
-import pandas as pd
+import sys
 from pathlib import Path
+from typing import Any
 
-# Load environment variables from .env file
-# Try to find .env in current dir or parent dir (to handle different launch paths)
+import httpx
+import pandas as pd
+from dotenv import load_dotenv
+from mcp.server.fastmcp import FastMCP
+
+# ---------------------------------------------------------------------------
+# Logging — use the stdlib logger so level is controllable via env var
+# ---------------------------------------------------------------------------
+logging.basicConfig(
+    level=logging.DEBUG,
+    stream=sys.stderr,
+    format="%(levelname)s [%(name)s] %(message)s",
+)
+logger = logging.getLogger("mqmcpserver")
+
+# ---------------------------------------------------------------------------
+# Environment variables
+# ---------------------------------------------------------------------------
+# Try to find .env in cwd or one level up (handles different launch paths)
 env_path = os.path.join(os.getcwd(), ".env")
 if not os.path.exists(env_path):
-    # Try one level up if we are in server/ directory
     env_path = os.path.join(os.path.dirname(os.getcwd()), ".env")
 
 load_dotenv(dotenv_path=env_path)
+logger.debug("Loading .env from %s", env_path)
 
-# Configuration from environment variables
-URL_BASE = os.getenv("MQ_URL_BASE")
+URL_BASE  = os.getenv("MQ_URL_BASE")
 USER_NAME = os.getenv("MQ_USER_NAME")
-PASSWORD = os.getenv("MQ_PASSWORD")
+PASSWORD  = os.getenv("MQ_PASSWORD")
+
+logger.debug("Target MQ URL:  %s", URL_BASE)
+logger.debug("Target MQ User: %s", USER_NAME)
+
+if not URL_BASE or not USER_NAME:
+    logger.error("CRITICAL: MQ_URL_BASE or MQ_USER_NAME is not set in .env")
 
 # Allowed hostname prefixes for safety (excludes production)
 ALLOWED_PREFIXES_STR = os.getenv("MQ_ALLOWED_HOSTNAME_PREFIXES", "lod,loq,lot")
-ALLOWED_HOSTNAME_PREFIXES = [prefix.strip() for prefix in ALLOWED_PREFIXES_STR.split(",")]
+ALLOWED_HOSTNAME_PREFIXES = [p.strip() for p in ALLOWED_PREFIXES_STR.split(",")]
 
+# Standard CSRF token value accepted by IBM MQ REST API (any non-empty value works)
+_CSRF_TOKEN = "token"
+
+# ---------------------------------------------------------------------------
+# CSV helpers — cached at module level so disk is only read once per startup
+# ---------------------------------------------------------------------------
 CSV_PATH = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) / "resources" / "qmgr_dump.csv"
 
-def load_csv():
-    """
-    Load CSV into dataframe with pipe delimiter
-    CSV now has header row: extractedat|hostname|qmname|objecttype|objectdef
-    """
+_CSV_CACHE: pd.DataFrame | None = None
+
+
+def _load_csv_from_disk() -> pd.DataFrame:
+    """Read and parse the qmgr_dump CSV from disk."""
     if not CSV_PATH.exists():
-        sys.stderr.write(f"⚠️ WARNING: CSV file not found at {CSV_PATH}\n")
+        logger.warning("CSV file not found at %s", CSV_PATH)
         return pd.DataFrame()
 
     try:
-        # Load CSV with pipe delimiter - header row is now present
-        # Format: extractedat | hostname | qmname | objecttype | objectdef
         df = pd.read_csv(
-            CSV_PATH, 
-            delimiter="|", 
+            CSV_PATH,
+            delimiter="|",
             skipinitialspace=True,
-            header=0  # Use first row as header
+            header=0,
         )
-        
-        # Rename columns to match expected format in the rest of the code
         df = df.rename(columns={
-            'qmname': 'qmgr',
-            'objecttype': 'object_type',
-            'objectdef': 'mqsc_command'
+            "qmname":     "qmgr",
+            "objecttype": "object_type",
+            "objectdef":  "mqsc_command",
         })
-        
-        # Optional: Convert extractedat to datetime if needed
-        if 'extractedat' in df.columns:
-            df['extractedat'] = pd.to_datetime(df['extractedat'], errors='coerce')
-        
-        sys.stderr.write(f"✅ CSV loaded successfully: {len(df)} rows, {len(df.columns)} columns\n")
-        sys.stderr.write(f"   Columns: {list(df.columns)}\n")
+        if "extractedat" in df.columns:
+            df["extractedat"] = pd.to_datetime(df["extractedat"], errors="coerce")
+        logger.info("CSV loaded successfully: %d rows, %d columns", len(df), len(df.columns))
+        logger.debug("Columns: %s", list(df.columns))
         return df
-    except Exception as e:
-        sys.stderr.write(f"❌ ERROR loading CSV: {str(e)}\n")
-        import traceback
-        sys.stderr.write(traceback.format_exc())
+    except Exception:
+        logger.exception("ERROR loading CSV")
         return pd.DataFrame()
 
+
+def load_csv() -> pd.DataFrame:
+    """Return the cached CSV dataframe, loading from disk on first call."""
+    global _CSV_CACHE
+    if _CSV_CACHE is None:
+        _CSV_CACHE = _load_csv_from_disk()
+    return _CSV_CACHE
+
+
+# ---------------------------------------------------------------------------
+# Hostname allow-list guard
+# ---------------------------------------------------------------------------
 def is_hostname_allowed(hostname: str) -> tuple[bool, str]:
     """
     Check if a hostname is allowed based on prefix filtering.
     Returns (True, "") if allowed, or (False, "reason message") if blocked.
     """
     hostname_lower = hostname.lower().strip()
-    
     for prefix in ALLOWED_HOSTNAME_PREFIXES:
         if hostname_lower.startswith(prefix.lower()):
             return True, ""
-    
+
     allowed_list = ", ".join(ALLOWED_HOSTNAME_PREFIXES)
-    message = f"🚫 Access to production systems is restricted for safety. This query targets hostname '{hostname}' which is not in the allowed list.\n\nAllowed hostname prefixes: {allowed_list}\n\nPlease use non-production environments for queries."
+    message = (
+        f"🚫 Access to production systems is restricted for safety. "
+        f"This query targets hostname '{hostname}' which is not in the allowed list.\n\n"
+        f"Allowed hostname prefixes: {allowed_list}\n\n"
+        f"Please use non-production environments for queries."
+    )
     return False, message
 
 
-# Debugging: Write to stderr instead of stdout (Stdout is reserved for MCP protocol)
-sys.stderr.write(f"DEBUG: Loading .env from {env_path}\n")
-sys.stderr.write(f"DEBUG: Target MQ URL: {URL_BASE}\n")
-sys.stderr.write(f"DEBUG: Target MQ User: {USER_NAME}\n")
-
-if not URL_BASE or not USER_NAME:
-    sys.stderr.write("❌ CRITICAL ERROR: MQ_URL_BASE or MQ_USER_NAME is not set in .env\n")
-
-# Initialize FastMCP server
-# Use MQ_MCP_HOST/PORT if set (useful if running in SSE mode via import)
+# ---------------------------------------------------------------------------
+# MCP server
+# ---------------------------------------------------------------------------
 mcp_host = os.getenv("MQ_MCP_HOST", "0.0.0.0")
 mcp_port = int(os.getenv("MQ_MCP_PORT", 8000))
-
 mcp = FastMCP("mqmcpserver", host=mcp_host, port=mcp_port)
 
 
 @mcp.resource("qmgr://dump")
 def get_qmgr_dump() -> list:
-    """
-    Return full QMGR dump as JSON
-    """
+    """Return full QMGR dump as JSON."""
     df = load_csv()
-
-    if df.empty:
-        return []
-
-    return df.to_dict(orient="records")
+    return [] if df.empty else df.to_dict(orient="records")
 
 
 @mcp.tool()
 def search_qmgr_dump(search_string: str) -> str:
     """
-    Search QMGR dump by any string and return matching records with hostname, queue manager, and object type.
-    Returns a formatted string with the most relevant columns for quick identification.
+    Search QMGR dump by any string and return matching records with hostname,
+    queue manager, and object type.
     """
-
-    sys.stderr.write(f"DEBUG: search_qmgr_dump called with search_string: '{search_string}'\n")
-
+    logger.debug("search_qmgr_dump called with search_string: '%s'", search_string)
     df = load_csv()
 
     if df.empty:
-        sys.stderr.write("DEBUG: CSV is empty. Returning empty result.\n")
-        return f"No records found. CSV file may be empty."
+        logger.debug("CSV is empty — returning empty result")
+        return "No records found. CSV file may be empty."
 
-    sys.stderr.write(f"DEBUG: CSV loaded with {len(df)} rows\n")
-    sys.stderr.write(f"DEBUG: CSV columns: {list(df.columns)}\n")
+    logger.debug("CSV contains %d rows", len(df))
 
     # Case-insensitive search across all columns
     mask = df.astype(str).apply(
-        lambda row: row.str.contains(
-            search_string,
-            case=False,
-            na=False
-        ).any(),
-        axis=1
+        lambda row: row.str.contains(search_string, case=False, na=False).any(),
+        axis=1,
     )
-
     result = df[mask]
 
     if result.empty:
-        sys.stderr.write(f"DEBUG: No matching records found for '{search_string}'.\n")
+        logger.debug("No matching records for '%s'", search_string)
         return f"❌ No records found matching '{search_string}'."
-    
+
     # Filter by allowed hostname prefixes
-    sys.stderr.write(f"DEBUG: Filtering by allowed hostname prefixes: {ALLOWED_HOSTNAME_PREFIXES}\n")
-    hostname_mask = result['hostname'].apply(lambda h: is_hostname_allowed(str(h))[0])
+    logger.debug("Filtering by allowed prefixes: %s", ALLOWED_HOSTNAME_PREFIXES)
+    hostname_mask = result["hostname"].apply(lambda h: is_hostname_allowed(str(h))[0])
     result = result[hostname_mask]
-    
+
     if result.empty:
         allowed_list = ", ".join(ALLOWED_HOSTNAME_PREFIXES)
-        sys.stderr.write(f"DEBUG: No records after hostname filtering.\n")
-        return f"❌ No results found for '{search_string}' in allowed environments.\n\n🚫 Production systems are excluded for safety.\n\nAllowed hostname prefixes: {allowed_list}"
+        return (
+            f"❌ No results found for '{search_string}' in allowed environments.\n\n"
+            f"🚫 Production systems are excluded for safety.\n\n"
+            f"Allowed hostname prefixes: {allowed_list}"
+        )
 
-    sys.stderr.write(f"DEBUG: Found {len(result)} matching records\n")
-    
-    # Select relevant columns for display
-    display_cols = result[['hostname', 'qmgr', 'object_type']].copy()
-    
-    # Remove exact duplicates
-    display_cols = display_cols.drop_duplicates()
-    sys.stderr.write(f"DEBUG: After removing duplicates: {len(display_cols)} unique records\n")
-    
-    # Format output as readable text with descriptive header
-    output_lines = []
-    output_lines.append(f"SEARCH RESULTS FOR: {search_string}")
-    output_lines.append("=" * 100)
-    
-    for idx, row in display_cols.iterrows():
-        hostname = str(row['hostname']).strip()
-        qmgr = str(row['qmgr']).strip()
-        obj_type = str(row['object_type']).strip()
-        formatted_line = f"Queue Manager: {qmgr} | Hostname: {hostname} | Type: {obj_type}"
-        output_lines.append(formatted_line)
-        sys.stderr.write(f"DEBUG: Result line: {formatted_line}\n")
-    
-    output_lines.append("=" * 100)
-    output_lines.append(f"SUMMARY: Found '{search_string}' on queue manager(s): {', '.join(display_cols['qmgr'].unique())}")
-    
-    result_text = "\n".join(output_lines)
-    sys.stderr.write(f"DEBUG: Final output:\n{result_text}\n")
-    return result_text
+    # Select and deduplicate key columns
+    display_cols = result[["hostname", "qmgr", "object_type"]].drop_duplicates()
+    logger.debug("Found %d unique records after dedup", len(display_cols))
+
+    output_lines = [
+        f"SEARCH RESULTS FOR: {search_string}",
+        "=" * 100,
+    ]
+    for _, row in display_cols.iterrows():
+        hostname = str(row["hostname"]).strip()
+        qmgr     = str(row["qmgr"]).strip()
+        obj_type = str(row["object_type"]).strip()
+        line = f"Queue Manager: {qmgr} | Hostname: {hostname} | Type: {obj_type}"
+        output_lines.append(line)
+        logger.debug("Result line: %s", line)
+
+    output_lines.extend([
+        "=" * 100,
+        f"SUMMARY: Found '{search_string}' on queue manager(s): {', '.join(display_cols['qmgr'].unique())}",
+    ])
+    return "\n".join(output_lines)
 
 
 @mcp.tool()
 async def dspmq() -> str:
-    """List available queue managers and whether they are running or not
-    """
+    """List available queue managers and whether they are running or not."""
     headers = {
         "Content-Type": "application/json",
-        "ibm-mq-rest-csrf-token": "token"
-    }    
-    
-    # For dspmq, we use localhost since we're listing all queue managers
+        "ibm-mq-rest-csrf-token": _CSRF_TOKEN,
+    }
     url = URL_BASE + "qmgr/"
-
     auth = httpx.BasicAuth(username=USER_NAME, password=PASSWORD)
-    async with httpx.AsyncClient(verify=False,auth=auth) as client:
-        try:            
+    async with httpx.AsyncClient(verify=False, auth=auth) as client:
+        try:
             response = await client.get(url, headers=headers, timeout=30.0)
             response.raise_for_status()
             return prettify_dspmq(response.content)
         except Exception as err:
             return f"❌ Connection Error: {str(err)}"
-                        
-# Put the output of for each queue manager on its own line, separated by ---                        
-def prettify_dspmq(payload: str) -> str:
-    jsonOutput = json.loads(payload.decode("utf-8"))
-    prettifiedOutput="\n---\n"
-    for x in jsonOutput['qmgr']:
-      prettifiedOutput += "name = " + x['name'] + ", running = " + x['state'] + "\n---\n"
-    
-    return prettifiedOutput
-    
+
+
+def prettify_dspmq(payload: bytes) -> str:
+    json_output = json.loads(payload.decode("utf-8"))
+    lines = ["\n---"]
+    for x in json_output["qmgr"]:
+        lines.append(f"name = {x['name']}, running = {x['state']}\n---")
+    return "\n".join(lines)
+
+
 @mcp.tool()
 async def dspmqver() -> str:
-    """Display IBM MQ version and installation information
-    """
+    """Display IBM MQ version and installation information."""
     headers = {
         "Content-Type": "application/json",
-        "ibm-mq-rest-csrf-token": "token"
-    }    
-    
-    # For dspmqver, we use localhost since it's installation-level info
+        "ibm-mq-rest-csrf-token": _CSRF_TOKEN,
+    }
     url = URL_BASE + "installation"
-
     auth = httpx.BasicAuth(username=USER_NAME, password=PASSWORD)
-    async with httpx.AsyncClient(verify=False,auth=auth) as client:
-        try:            
+    async with httpx.AsyncClient(verify=False, auth=auth) as client:
+        try:
             response = await client.get(url, headers=headers, timeout=30.0)
             response.raise_for_status()
             return prettify_dspmqver(response.content)
         except Exception as err:
             return f"❌ Connection Error: {str(err)}"
 
-def prettify_dspmqver(payload: str) -> str:
-    jsonOutput = json.loads(payload.decode("utf-8"))
-    prettifiedOutput = "\n---\n"
-    for x in jsonOutput['installation']:
-        prettifiedOutput += f"Name: {x.get('name', 'N/A')}\n"
-        prettifiedOutput += f"Version: {x.get('version', 'N/A')}\n"
-        prettifiedOutput += f"Architecture: {x.get('architecture', 'N/A')}\n"
-        prettifiedOutput += f"Installation Path: {x.get('installationPath', 'N/A')}\n"
-        prettifiedOutput += "---\n"
-    
-    return prettifiedOutput
+
+def prettify_dspmqver(payload: bytes) -> str:
+    json_output = json.loads(payload.decode("utf-8"))
+    lines = ["\n---"]
+    for x in json_output["installation"]:
+        lines.append(
+            f"Name: {x.get('name', 'N/A')}\n"
+            f"Version: {x.get('version', 'N/A')}\n"
+            f"Architecture: {x.get('architecture', 'N/A')}\n"
+            f"Installation Path: {x.get('installationPath', 'N/A')}\n---"
+        )
+    return "\n".join(lines)
+
 
 @mcp.tool()
 async def runmqsc(qmgr_name: str, mqsc_command: str) -> str:
-    """Run an MQSC command against a specific queue manager
+    """Run an MQSC command against a specific queue manager.
 
     Args:
-        qmgr_name: A queue manager name   
-        mqsc_command: An MQSC command to run on the queue manager   
+        qmgr_name:    A queue manager name
+        mqsc_command: An MQSC command to run on the queue manager
     """
     headers = {
         "Content-Type": "application/json",
-        "ibm-mq-rest-csrf-token": "a"
+        "ibm-mq-rest-csrf-token": _CSRF_TOKEN,
     }
-    
-    # Check if qmgr_name corresponds to an allowed hostname
-    # First, try to find the hostname from the CSV based on qmgr_name
+
+    # Hostname allow-list check using CSV lookup
     df = load_csv()
     if not df.empty:
-        qmgr_matches = df[df['qmgr'].str.upper() == qmgr_name.upper()]
+        qmgr_matches = df[df["qmgr"].str.upper() == qmgr_name.upper()]
         if not qmgr_matches.empty:
-            hostname = qmgr_matches.iloc[0]['hostname']
+            hostname = qmgr_matches.iloc[0]["hostname"]
             allowed, message = is_hostname_allowed(hostname)
             if not allowed:
                 return message
-    
-    data = "{\"type\":\"runCommand\",\"parameters\":{\"command\":\"" + mqsc_command + "\"}}"
-    
-    # Replace 'localhost' with queue manager name in the URL
-    url_with_qmgr_host = URL_BASE.replace('localhost', qmgr_name)
+
+    # Use json.dumps to safely serialise the command (handles special characters)
+    data = json.dumps({"type": "runCommand", "parameters": {"command": mqsc_command}})
+
+    url_with_qmgr_host = URL_BASE.replace("localhost", qmgr_name)
     url = url_with_qmgr_host + "action/qmgr/" + qmgr_name + "/mqsc"
 
     auth = httpx.BasicAuth(username=USER_NAME, password=PASSWORD)
-    async with httpx.AsyncClient(verify=False,auth=auth) as client:
-        try:            
+    async with httpx.AsyncClient(verify=False, auth=auth) as client:
+        try:
             response = await client.post(url, data=data, headers=headers, timeout=30.0)
             response.raise_for_status()
             return prettify_runmqsc(response.content)
         except Exception as err:
             return f"❌ Connection Error: {str(err)}"
-            
-# Put the output of each MQSC command on its own line, separated by ---
-# Deals with both z/OS and distributed queue managers
-def prettify_runmqsc(payload: str) -> str:
-    jsonOutput = json.loads(payload.decode("utf-8"))
-    prettifiedOutput="\n---\n"
-    for x in jsonOutput['commandResponse']:
-        # z/OS
-        if x['text'][0].startswith("CSQN205I"):
-            # Remove leading and trailing messages, as they aren't needed. 
-            x['text'].pop(0)            
-            x['text'].pop()
-            for y in x['text']:
-                prettifiedOutput += y[15:] + "\n---\n"            
-        # Distributed
-        else:        
-            for line in x['text']:
-                if line.strip():
-                    prettifiedOutput += line + "\n"
-            prettifiedOutput += "---\n"
-    
-    return prettifiedOutput
 
+
+def prettify_runmqsc(payload: bytes) -> str:
+    """Format MQSC command response for both z/OS and distributed queue managers."""
+    json_output = json.loads(payload.decode("utf-8"))
+    lines = ["\n---"]
+    for x in json_output["commandResponse"]:
+        # z/OS responses start with CSQN205I
+        if x["text"][0].startswith("CSQN205I"):
+            x["text"].pop(0)
+            x["text"].pop()
+            for y in x["text"]:
+                lines.append(y[15:] + "\n---")
+        else:
+            for line in x["text"]:
+                if line.strip():
+                    lines.append(line)
+            lines.append("---")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Startup connectivity check
+# ---------------------------------------------------------------------------
 async def verify_connectivity():
-    """Verify that the MQ REST API is reachable before starting the server"""
+    """Verify that the MQ REST API is reachable before starting the server."""
     if not URL_BASE or not USER_NAME:
         return
-        
-    sys.stderr.write(f"DEBUG: Verifying connectivity to {URL_BASE}...\n")
+
+    logger.debug("Verifying connectivity to %s ...", URL_BASE)
     auth = httpx.BasicAuth(username=USER_NAME, password=PASSWORD)
     async with httpx.AsyncClient(verify=False, auth=auth) as client:
         try:
-            # Try to hit the installation endpoint as a lightweight check
             response = await client.get(URL_BASE + "installation", timeout=5.0)
             if response.status_code == 200:
-                sys.stderr.write("✅ SUCCESS: MQ REST API is responsive.\n")
+                logger.info("SUCCESS: MQ REST API is responsive.")
             else:
-                sys.stderr.write(f"⚠️ WARNING: MQ REST API returned status {response.status_code}. Please check your .env credentials.\n")
+                logger.warning(
+                    "MQ REST API returned status %d — check .env credentials.",
+                    response.status_code,
+                )
         except Exception as e:
-            sys.stderr.write(f"❌ CRITICAL: Cannot reach MQ REST API. Ensure 'dspmqweb' is running on the MQ server.\n")
-            sys.stderr.write(f"   Error: {str(e)}\n\n")
+            logger.error(
+                "CRITICAL: Cannot reach MQ REST API. Ensure 'dspmqweb' is running.\n  Error: %s",
+                e,
+            )
 
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    # Initialize and run the server
-    # Transport can be set via MQ_MCP_TRANSPORT (default: stdio)
     transport = os.getenv("MQ_MCP_TRANSPORT", "stdio")
-    
-    sys.stderr.write(f"DEBUG: Starting MCP Server with transport={transport}\n")
+    logger.debug("Starting MCP Server with transport=%s", transport)
+    asyncio.run(verify_connectivity())   # #1: actually run the connectivity check
     mcp.run(transport=transport)

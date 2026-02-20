@@ -3,3 +3,4 @@ httpx
 mcp
 streamlit
 python-dotenv
+pandas
