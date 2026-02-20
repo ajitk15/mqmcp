@@ -20,9 +20,23 @@ User Input → Client (Guided/AI/Basic) → MCP Protocol (stdio)
 ```
 
 ### Component Breakdown
-*   **`mqmcpserver.py`**: The "Brain". Handles tool registration and REST API orchestration.
-*   **`dynamic_client.py`**: The "Router". Provides regex-based intent detection.
-*   **`llm_client.py`**: The "Intelligence". Integrates with OpenAI/Anthropic for natural language tool selection.
+
+#### Server
+*   **`mqmcpserver.py`**: The "Brain". Handles tool registration, REST API orchestration, and CSV-backed queue dump search. Uses stdlib `logging` and a module-level CSV cache for performance.
+
+#### Shared MQ Knowledge (`clients/mq_tools/`)
+*   **`prompts.py`**: Single source of truth for `MQ_SYSTEM_PROMPT` — consumed by all LLM providers.
+*   **`schemas.py`**: Canonical tool definitions (`TOOLS_OPENAI`, `TOOLS_ANTHROPIC`, `TOOLS_GEMINI`) built from one shared `_TOOLS_CORE` list so they never drift.
+*   **`converters.py`**: Converts live MCP tool objects to provider-specific schemas (`to_openai_schema`, `to_anthropic_schema`, `to_gemini_declarations`) — used by SSE/remote mode.
+
+#### LLM Providers (`clients/providers/`)
+*   **`base.py`**: Abstract `LLMProvider` class — enforces a uniform `chat()` interface: `(user_input, history, tools, call_tool, tools_used) → str`.
+*   **`openai_provider.py`** / **`anthropic_provider.py`** / **`gemini_provider.py`**: Self-contained handlers for each provider's API, tool-call loop, and response parsing.
+*   **`__init__.py`**: Registry — `get_provider("openai" | "anthropic" | "gemini")` returns the right handler. Adding a new provider = one file + one registry line.
+
+#### Orchestrators
+*   **`llm_client.py`**: Thin orchestrator (~230 lines). Manages the MCP stdio session and routes `handle_user_input()` calls to the correct provider module.
+*   **`dynamic_client.py`**: The regex-based "Router". Provides fast, deterministic intent detection without LLM overhead.
 
 ### Server Execution
 *   **Dynamic Clients (Basic/Guided/AI)**: Automatically launch their own private server instance.
@@ -52,9 +66,10 @@ Used in the **Basic Assistant**. It is fast, predictable, and free.
 *   **Best for**: Common operations like "List queues" or "Check depth".
 
 ### 2. Tool Calling (LLM)
-Used in the **AI Assistant**. It uses models like GPT-4 or Claude 3.5 Sonnet to decide which tool to call.
+Used in the **AI Assistant** and the **Remote AI Assistant**. It supports three providers — OpenAI GPT-4, Anthropic Claude, and Google Gemini.
 *   **Pros**: Understands complex synonyms, extracts parameters intelligently.
 *   **Best for**: Unstructured requests like "Are there any issues with my production queues?"
+*   **Provider selection**: All providers share the same `MQ_SYSTEM_PROMPT` and the same four MQ tools — provider-specific schema conversion is handled transparently by `mq_tools/converters.py`.
 
 ### 3. Hybrid Strategy (Recommended)
 The **Guided Assistant** combines specific task definitions with the dynamic client to provide a reliable "one-click" experience while still supporting natural language commands.
@@ -155,11 +170,25 @@ The MCP server communicates with MQ via the REST interface. You must ensure this
 
 ## 🛠️ Dependency & Troubleshooting
 
-### Required Packages
+### Required Packages (`requirements.txt`)
 *   `httpx`: Async HTTP client for MQ REST interactions.
 *   `mcp`: The core protocol library.
 *   `streamlit`: The web interface framework.
 *   `python-dotenv`: Management of environment variables.
+*   `pandas`: CSV-backed queue dump search in `mqmcpserver.py`.
+
+### Optional LLM Packages (`requirements-llm.txt`)
+Install only the packages for the providers you plan to use:
+
+| Package | Provider |
+|---|---|
+| `openai` | OpenAI GPT-4 |
+| `anthropic` | Anthropic Claude |
+| `google-generativeai` | Google Gemini |
+
+```powershell
+pip install -r requirements-llm.txt
+```
 
 ### Troubleshooting Common Issues
 
@@ -181,7 +210,7 @@ The MCP server communicates with MQ via the REST interface. You must ensure this
  # Run from the root directory
  npx @modelcontextprotocol/inspector python server/mqmcpserver.py
  ```
- *Technical Note: The inspector captures `stdout` for the protocol and displays `stderr` in the terminal console, allowing you to see the "DEBUG" messages.*
+ *Technical Note: The inspector captures `stdout` for the protocol and displays `stderr` in the terminal console, letting you see the server's `logging` output (level `DEBUG` by default in stdio mode).*
  
  ### Process-Level Configuration
  When running as a standalone server (e.g., in Claude Desktop), the server needs to know where its dependencies and environment variables are.
@@ -210,9 +239,8 @@ When enabled, each tool call shows:
 
 ### Implementation
 The `tool_logger.py` utility module provides:
-- `display_tool_call(tool_name, args)` - Streamlit UI display function
-- `get_rest_api_url(tool_name, args)` - REST endpoint construction (matches `dynamic_client` logic)
-- `should_show_logging()` - Environment-based toggle
+- `get_rest_api_url(tool_name, args)` — REST endpoint construction
+- `should_show_logging()` — environment-based toggle
 
 ### Example Output
 ```
@@ -273,6 +301,11 @@ The following metrics are automatically captured for every tool call:
 ### Security
 *   **DON'T**: Hardcode credentials in scripts; always use `.env`.
 *   **DON'T**: Expose the MCP server directly to the public internet without an orchestrator/proxy.
+
+### Provider Extensibility
+*   **DO**: Add new LLM providers by creating `clients/providers/<name>_provider.py` implementing `LLMProvider.chat()` and registering it in `clients/providers/__init__.py`.
+*   **DO**: Keep tool definitions in `mq_tools/schemas.py` (`_TOOLS_CORE`) — the OpenAI, Anthropic, and Gemini formats are generated automatically.
+*   **DO**: Update `mq_tools/prompts.py` (`MQ_SYSTEM_PROMPT`) when refining the MQ instructions — all providers pick up the change immediately.
 
 ---
 

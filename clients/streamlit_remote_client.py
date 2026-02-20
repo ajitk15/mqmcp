@@ -1,16 +1,11 @@
-"""
-IBM MQ Remote AI Assistant - Streamlit Client
-
-Connects to a remote MCP server via SSE and provides an OpenAI-powered 
-conversational interface with tool calling and transparency logging.
-"""
-
 import streamlit as st
 import asyncio
 import os
 import json
 from dotenv import load_dotenv
 from tool_logger import get_rest_api_url, should_show_logging
+from mq_tools.converters import to_openai_schema, to_anthropic_schema, to_gemini_declarations
+from mq_tools.prompts import MQ_SYSTEM_PROMPT
 
 try:
     from openai import OpenAI
@@ -94,58 +89,6 @@ async def call_mcp_tool(endpoint, tool_name, arguments):
     except Exception as e:
         return f"❌ Error: {str(e)}"
 
-def convert_mcp_tools_to_openai_schema(mcp_tools):
-    """Convert MCP tools to OpenAI function calling schema"""
-    openai_tools = []
-    for tool in mcp_tools:
-        parameters = tool.inputSchema if hasattr(tool, 'inputSchema') and tool.inputSchema else {"type": "object", "properties": {}}
-        openai_tools.append({
-            "type": "function",
-            "function": {
-                "name": tool.name,
-                "description": tool.description or f"Execute {tool.name}",
-                "parameters": parameters
-            }
-        })
-    return openai_tools
-
-def convert_mcp_tools_to_anthropic_schema(mcp_tools):
-    """Convert MCP tools to Anthropic tool calling schema"""
-    anthropic_tools = []
-    for tool in mcp_tools:
-        input_schema = tool.inputSchema if hasattr(tool, 'inputSchema') and tool.inputSchema else {"type": "object", "properties": {}}
-        anthropic_tools.append({
-            "name": tool.name,
-            "description": tool.description or f"Execute {tool.name}",
-            "input_schema": input_schema
-        })
-    return anthropic_tools
-
-def convert_mcp_tools_to_gemini_declarations(mcp_tools):
-    """Convert MCP tools to Gemini FunctionDeclaration list"""
-    declarations = []
-    for tool in mcp_tools:
-        schema = tool.inputSchema if hasattr(tool, 'inputSchema') and tool.inputSchema else {}
-        props = schema.get("properties", {})
-        required = schema.get("required", [])
-        declarations.append(
-            genai.protos.FunctionDeclaration(
-                name=tool.name,
-                description=tool.description or f"Execute {tool.name}",
-                parameters=genai.protos.Schema(
-                    type=genai.protos.Type.OBJECT,
-                    properties={
-                        k: genai.protos.Schema(
-                            type=genai.protos.Type.STRING,
-                            description=v.get("description", "") if isinstance(v, dict) else ""
-                        )
-                        for k, v in props.items()
-                    },
-                    required=required
-                ) if props else genai.protos.Schema(type=genai.protos.Type.OBJECT, properties={})
-            )
-        )
-    return declarations
 
 async def handle_ai_conversation(user_message, endpoint, api_key):
     """Handle conversation with OpenAI and execute tool calls"""
@@ -153,33 +96,30 @@ async def handle_ai_conversation(user_message, endpoint, api_key):
         return None, "Please provide an OpenAI API key in the sidebar."
     if not HAS_OPENAI:
         return None, "❌ openai library not installed."
-    
-    # Get available MCP tools
+
     if not st.session_state.mcp_tools:
         st.session_state.mcp_tools = await get_mcp_tools(endpoint)
     if not st.session_state.mcp_tools:
         return None, "No MCP tools available. Check your MCP endpoint."
-    
-    openai_tools = convert_mcp_tools_to_openai_schema(st.session_state.mcp_tools)
-    
-    system_prompt = _get_system_prompt()
-    messages = [{"role": "system", "content": system_prompt}]
+
+    openai_tools = to_openai_schema(st.session_state.mcp_tools)
+    messages = [{"role": "system", "content": MQ_SYSTEM_PROMPT}]
     for msg in st.session_state.messages_remote[-10:]:
         messages.append({"role": msg["role"], "content": msg["content"]})
     messages.append({"role": "user", "content": user_message})
-    
+
     try:
         client = OpenAI(api_key=api_key)
         tools_used = []
-        
+
         response = client.chat.completions.create(
             model="gpt-4",
             messages=messages,
             tools=openai_tools,
-            tool_choice="auto"
+            tool_choice="auto",
         )
         response_message = response.choices[0].message
-        
+
         while response_message.tool_calls:
             messages.append(response_message)
             for tool_call in response_message.tool_calls:
@@ -191,16 +131,16 @@ async def handle_ai_conversation(user_message, endpoint, api_key):
                     "role": "tool",
                     "tool_call_id": tool_call.id,
                     "name": function_name,
-                    "content": tool_result
+                    "content": tool_result,
                 })
             response = client.chat.completions.create(
                 model="gpt-4",
                 messages=messages,
                 tools=openai_tools,
-                tool_choice="auto"
+                tool_choice="auto",
             )
             response_message = response.choices[0].message
-        
+
         return tools_used, response_message.content
     except Exception as e:
         import traceback
@@ -219,8 +159,7 @@ async def handle_ai_conversation_anthropic(user_message, endpoint, api_key):
     if not st.session_state.mcp_tools:
         return None, "No MCP tools available. Check your MCP endpoint."
 
-    anthropic_tools = convert_mcp_tools_to_anthropic_schema(st.session_state.mcp_tools)
-    system_prompt = _get_system_prompt()
+    anthropic_tools = to_anthropic_schema(st.session_state.mcp_tools)
 
     # Build history — Anthropic uses user/assistant roles only
     history = []
@@ -238,9 +177,9 @@ async def handle_ai_conversation_anthropic(user_message, endpoint, api_key):
             response = client.messages.create(
                 model="claude-3-5-sonnet-20241022",
                 max_tokens=2048,
-                system=system_prompt,
+                system=MQ_SYSTEM_PROMPT,
                 tools=anthropic_tools,
-                messages=history
+                messages=history,
             )
 
             has_tool_use = any(b.type == "tool_use" for b in response.content)
@@ -259,7 +198,7 @@ async def handle_ai_conversation_anthropic(user_message, endpoint, api_key):
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,
-                        "content": tool_result
+                        "content": tool_result,
                     })
             history.append({"role": "user", "content": tool_results})
 
@@ -282,14 +221,12 @@ async def handle_ai_conversation_gemini(user_message, endpoint, api_key):
         return None, "No MCP tools available. Check your MCP endpoint."
 
     genai.configure(api_key=api_key)
-    declarations = convert_mcp_tools_to_gemini_declarations(st.session_state.mcp_tools)
-    tool_declarations = [genai.protos.Tool(function_declarations=declarations)]
-    system_prompt = _get_system_prompt()
+    tool_declarations = to_gemini_declarations(st.session_state.mcp_tools)
 
     model = genai.GenerativeModel(
         model_name="gemini-2.0-flash",
-        system_instruction=system_prompt,
-        tools=tool_declarations
+        system_instruction=MQ_SYSTEM_PROMPT,
+        tools=tool_declarations,
     )
 
     # Build prior history (text only)
@@ -310,7 +247,7 @@ async def handle_ai_conversation_gemini(user_message, endpoint, api_key):
             response = chat.send_message(current_message)
             part = response.candidates[0].content.parts[0]
 
-            if hasattr(part, 'function_call') and part.function_call.name:
+            if hasattr(part, "function_call") and part.function_call.name:
                 fn = part.function_call
                 tool_name = fn.name
                 tool_args = dict(fn.args)
@@ -321,7 +258,7 @@ async def handle_ai_conversation_gemini(user_message, endpoint, api_key):
                     parts=[genai.protos.Part(
                         function_response=genai.protos.FunctionResponse(
                             name=tool_name,
-                            response={"result": tool_result}
+                            response={"result": tool_result},
                         )
                     )]
                 )
@@ -333,33 +270,6 @@ async def handle_ai_conversation_gemini(user_message, endpoint, api_key):
         import traceback
         return None, f"❌ Error: {str(e)}\n\n{traceback.format_exc()}"
 
-
-def _get_system_prompt() -> str:
-    """Shared system prompt for all providers"""
-    return """You are an IBM MQ expert assistant. Your PRIMARY JOB is to call tools to answer user questions. Do NOT ask users for input.
-
-QUEUE NAMING CONVENTIONS - YOU MUST KNOW THESE:
-- QL* = Local Queue (e.g., QL.IN.APP1, QL.OUT.APP2)
-- QA* = Alias Queue (e.g., QA.IN.APP1 - points to another queue via TARGET)
-- QR* = Remote Queue (e.g., QR.REMOTE.Q - references queue on remote QM)
-- Others = System/Application specific queues
-
-MANDATORY RULES - YOU MUST FOLLOW THESE:
-1. When a user asks about ANY queue, ALWAYS search for it first using search_qmgr_dump
-2. When search results show queue manager info, IMMEDIATELY extract ALL queue manager names
-3. **CRITICAL**: If a queue exists on MULTIPLE queue managers, you MUST query ALL of them
-4. NEVER ask "which queue manager?" if search results already show it
-5. ALWAYS make the next tool call in the SAME iteration - do not wait for user response
-6. Queue depth MQSC commands:
-   - Local (QL*): DISPLAY QLOCAL(<QUEUE_NAME>) CURDEPTH
-   - Remote (QR*): DISPLAY QREMOTE(<QUEUE_NAME>) CURDEPTH
-   - Alias (QA*): DISPLAY QALIAS(<QUEUE_NAME>) to see TARGET, then query the TARGET queue
-7. COMPLETE THE WORKFLOW - user asks question → search → identify ALL QMs → runmqsc on EACH → return answer
-
-YOU MUST NOT:
-- Ask "which queue manager?" when search already found it
-- Wait for user input when you can call tools
-- Query only ONE queue manager when the queue exists on MULTIPLE queue managers"""
 
 # CUSTOM CSS & GLOBAL UI COMPONENTS
 st.markdown(f"""
