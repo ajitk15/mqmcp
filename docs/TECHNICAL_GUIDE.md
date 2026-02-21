@@ -103,9 +103,10 @@ MQ_ALLOWED_HOSTNAME_PREFIXES=lod,loq,lot
 ```
 
 ### How It Works
-1. **Server-Side Filtering**: The `search_qmgr_dump` tool filters results by hostname prefix
-2. **Pre-Execution Validation**: The `runmqsc` tool validates hostname before executing commands
-3. **Client-Side Validation**: The dynamic client performs hostname checks before calling MCP tools
+1. **Server-Side Filtering**: The `search_qmgr_dump` tool filters results by hostname prefix. For allowed matches, it proceeds normally. For restricted matches, it appends them to the result list with a clear `[RESTRICTED: hostname]` tag.
+2. **Pre-Execution Validation**: The `runmqsc` tool validates hostname before executing commands.
+3. **Client-Side Validation**: The dynamic client performs hostname checks before calling MCP tools.
+4. **AI Politeness**: The AI Assistant is explicitly instructed to recognize `[RESTRICTED]` tags and respond politely: "I found this object on [QM_NAME], but I do NOT have access to production systems for safety."
 
 ### User Experience
 
@@ -222,13 +223,17 @@ pip install -r requirements-llm.txt
 
 ## 🔍 Tool Transparency (Streamlit Apps)
 
-All Streamlit applications support configurable tool call logging to show exactly what MCP tools are being executed.
+All Streamlit applications support configurable tool call logging to show exactly what MCP tools are being executed. Additionally, you can control the verbosity of the core MCP server.
 
 ### Configuration
-Control logging display via `.env`:
+Control logging display and verbosity via `.env`:
 ```env
+# Client UI: Show or hide tool debugging expanders
 MQ_SHOW_TOOL_LOGGING=true  # Show tool logging (default)
 MQ_SHOW_TOOL_LOGGING=false # Hide for cleaner UI
+
+# Server Console: Control MCP server stderr output
+MQ_LOG_LEVEL=INFO # Default (DEBUG, WARNING, ERROR, CRITICAL)
 ```
 
 ### What's Displayed

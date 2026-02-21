@@ -4,6 +4,7 @@ import os
 import json
 from dotenv import load_dotenv
 from tool_logger import get_rest_api_url, should_show_logging
+from metrics_logger import get_metrics_logger
 from mq_tools.converters import to_openai_schema, to_anthropic_schema, to_gemini_declarations
 from mq_tools.prompts import MQ_SYSTEM_PROMPT
 
@@ -25,11 +26,11 @@ try:
 except ImportError:
     HAS_GEMINI = False
 
-from mcp import ClientSession
 from mcp.client.sse import sse_client
 
 # Load environment variables
 load_dotenv()
+logger = get_metrics_logger("mq-streamlit-remote")
 
 # Set up page config
 st.set_page_config(page_title="IBM MQ Remote AI Assistant", page_icon="🌐", layout="wide")
@@ -578,6 +579,10 @@ if prompt := st.chat_input("Ask something about IBM MQ..."):
             if usage and not tools_used:
                 st.caption(f"📊 Tokens: {usage.get('total_tokens', 0)} (Prompt: {usage.get('prompt_tokens', 0)}, Completion: {usage.get('completion_tokens', 0)})")
             
+            # Log token usage to metrics file
+            if usage:
+                logger.info(f"LLM Token Usage ({provider.capitalize()} Client)", extra={"metrics": usage})
+
             # Display tools used
             if tools_used and should_show_logging():
                 with tools_placeholder.expander("🔧 Tools Used by AI"):

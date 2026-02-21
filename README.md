@@ -106,6 +106,9 @@ MQ_ALLOWED_HOSTNAME_PREFIXES=lod,loq,lot
 # Tool Logging Display (true/false)
 MQ_SHOW_TOOL_LOGGING=true
 
+# Server Logging Level (INFO, DEBUG, WARNING, ERROR)
+MQ_LOG_LEVEL=INFO
+
 # LLM Provider API Keys (add whichever providers you plan to use)
 OPENAI_API_KEY=sk-...          # OpenAI GPT-4
 ANTHROPIC_API_KEY=sk-ant-...   # Anthropic Claude

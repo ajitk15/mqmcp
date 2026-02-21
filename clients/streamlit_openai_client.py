@@ -7,9 +7,11 @@ import atexit
 from llm_client import LLMToolCaller
 from dotenv import load_dotenv
 from tool_logger import get_rest_api_url, should_show_logging
+from metrics_logger import get_metrics_logger
 
 # Load environment variables
 load_dotenv()
+logger = get_metrics_logger("mq-streamlit-openai")
 
 # Cleanup handler for graceful shutdown
 def cleanup_on_exit():
@@ -371,6 +373,10 @@ if prompt := st.chat_input("Ask something about IBM MQ..."):
             if usage and not tools_used:
                 st.caption(f"📊 Tokens: {usage.get('total_tokens', 0)} (Prompt: {usage.get('prompt_tokens', 0)}, Completion: {usage.get('completion_tokens', 0)})")
             
+            # Log token usage to metrics file
+            if usage:
+                logger.info("LLM Token Usage (OpenAI Client)", extra={"metrics": usage})
+
             # Display tools used
             if tools_used and should_show_logging():
                 with tools_placeholder.expander("🔧 Tools Used by AI (in order)"):
