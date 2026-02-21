@@ -68,14 +68,14 @@ async def run_llm_command(prompt, client):
         return None, f"⚠️ {label} API Key is missing. Please provide it in the sidebar."
     
     try:
-        response = await client.handle_user_input(prompt)
+        response, usage = await client.handle_user_input(prompt)
         tools_used = client.tools_used
-        return tools_used, response
+        return tools_used, response, usage
     except Exception as e:
         import traceback
         error_msg = f"❌ Error: {str(e)}"
         st.error(f"{error_msg}\n\n{traceback.format_exc()}")
-        return None, error_msg
+        return None, error_msg, {}
 
 @st.cache_resource
 def get_llm_client(provider="openai"):
@@ -294,8 +294,13 @@ if not st.session_state.client_ready:
 for message in st.session_state.messages_llm:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
+        
+        # Display token usage if available (only if no tools, to avoid redundancy)
+        if "usage" in message and message["usage"] and not message.get("tools_used"):
+            st.caption(f"📊 Tokens: {message['usage'].get('total_tokens', 0)} (Prompt: {message['usage'].get('prompt_tokens', 0)}, Completion: {message['usage'].get('completion_tokens', 0)})")
+
         # Display tools used if available
-        if "tools_used" in message and message["tools_used"]:
+        if "tools_used" in message and message["tools_used"] and should_show_logging():
             with st.expander("🔧 Tools Used (in order)"):
                 for idx, tool in enumerate(message["tools_used"], 1):
                     col1, col2 = st.columns([1, 4])
@@ -311,6 +316,11 @@ for message in st.session_state.messages_llm:
                     if should_show_logging():
                         rest_endpoint = get_rest_api_url(tool['name'], tool.get('args', {}))
                         st.code(rest_endpoint, language="text")
+                
+                # Show token usage inside expander
+                if "usage" in message and message["usage"]:
+                    st.divider()
+                    st.caption(f"📊 **Token Usage:** {message['usage'].get('total_tokens', 0)} total ({message['usage'].get('prompt_tokens', 0)} prompt, {message['usage'].get('completion_tokens', 0)} completion)")
 
 # User input
 if prompt := st.chat_input("Ask something about IBM MQ..."):
@@ -348,18 +358,21 @@ if prompt := st.chat_input("Ask something about IBM MQ..."):
             try:
                 loop = get_event_loop()
                 # Pass the persistent client to maintain conversation history
-                tools_used, full_response = loop.run_until_complete(
+                tools_used, full_response, usage = loop.run_until_complete(
                     run_llm_command(prompt, st.session_state.llm_client)
                 )
             except Exception as e:
                 import traceback
                 tools_used = None
                 full_response = f"❌ Error: {str(e)}\n\n{traceback.format_exc()}"
+                usage = {}
             
             message_placeholder.markdown(full_response)
+            if usage and not tools_used:
+                st.caption(f"📊 Tokens: {usage.get('total_tokens', 0)} (Prompt: {usage.get('prompt_tokens', 0)}, Completion: {usage.get('completion_tokens', 0)})")
             
             # Display tools used
-            if tools_used:
+            if tools_used and should_show_logging():
                 with tools_placeholder.expander("🔧 Tools Used by AI (in order)"):
                     for idx, tool in enumerate(tools_used, 1):
                         col1, col2 = st.columns([1, 4])
@@ -375,10 +388,16 @@ if prompt := st.chat_input("Ask something about IBM MQ..."):
                         if should_show_logging():
                             rest_endpoint = get_rest_api_url(tool['name'], tool.get('args', {}))
                             st.code(rest_endpoint, language="text")
+                    
+                    # Show token usage inside expander
+                    if usage:
+                        st.divider()
+                        st.caption(f"📊 **Token Usage:** {usage.get('total_tokens', 0)} total ({usage.get('prompt_tokens', 0)} prompt, {usage.get('completion_tokens', 0)} completion)")
         
         # Add assistant response to chat history with tools used
         st.session_state.messages_llm.append({
             "role": "assistant", 
             "content": full_response,
-            "tools_used": tools_used
+            "tools_used": tools_used,
+            "usage": usage
         })

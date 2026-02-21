@@ -171,12 +171,11 @@ class LLMToolCaller:
     # Core conversation entry point
     # ------------------------------------------------------------------
 
-    async def handle_user_input(self, user_input: str) -> str:
+    async def handle_user_input(self, user_input: str) -> tuple[str, dict]:
         """
         Route the user's message to the configured LLM provider.
 
-        Returns the final text response after all tool calls have been
-        resolved.
+        Returns (final_text_response, usage_dict)
         """
         print(f"\n💬 User: {user_input}")
         print("-" * 70)
@@ -194,13 +193,18 @@ class LLMToolCaller:
                 result = await self.session.call_tool(tool_name, tool_args)
             return result.content[0].text
 
-        return await provider_impl.chat(
+        response, usage = await provider_impl.chat(
             user_input=user_input,
             conversation_history=self.conversation_history,
             tools=tools,
             call_tool=call_tool,
             tools_used=self.tools_used,
         )
+        
+        # Log token usage
+        logger.info(f"LLM Token Usage ({self.provider})", extra={"metrics": usage})
+        
+        return response, usage
 
     # ------------------------------------------------------------------
     # Interactive REPL
@@ -223,8 +227,9 @@ class LLMToolCaller:
                 if user_input.lower() in ("quit", "exit", "bye"):
                     print("\n👋 Goodbye!")
                     break
-                response = await self.handle_user_input(user_input)
+                response, usage = await self.handle_user_input(user_input)
                 print(f"\n🤖 Assistant:\n{response}")
+                print(f"📊 Tokens: {usage.get('total_tokens', 0)} (P:{usage.get('prompt_tokens', 0)} C:{usage.get('completion_tokens', 0)})")
             except KeyboardInterrupt:
                 print("\n\n👋 Goodbye!")
                 break

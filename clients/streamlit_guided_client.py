@@ -28,24 +28,25 @@ async def run_mcp_command(prompt, show_tool_call=None):
                     show_tool_call(tool_name, args)
                 client._log_tool_call = new_log
             
-            response = await client.handle_user_input(prompt)
-            return response
+            response, usage = await client.handle_user_input(prompt)
+            return response, usage
         finally:
             builtins.input = original_input
             await client.disconnect()
     except Exception as e:
-        return f"❌ Error: {str(e)}"
+        return f"❌ Error: {str(e)}", {}
 
 # Connectivity Check logic
 mcp_status_html = '<span style="color: #ffcccc;">🔘 Checking...</span>'
 try:
-    res = asyncio.run(run_mcp_command("dspmq"))
+    res, _ = asyncio.run(run_mcp_command("dspmq"))
     if "❌" in res:
         mcp_status_html = '<span style="color: #ff9999;">🔴 MCP Offline</span>'
     else:
         mcp_status_html = '<span style="color: #ccffcc;">🟢 MCP Online</span>'
 except:
     mcp_status_html = '<span style="color: #ff9999;">🔴 MCP Error</span>'
+
 
 # CUSTOM CSS & GLOBAL UI COMPONENTS
 st.markdown(f"""
@@ -225,14 +226,19 @@ with st.container(border=True):
                 
                 with st.status("Executing Command...", expanded=True) as status:
                     st.write(f"Connecting to IBM MQ...")
-                    response = asyncio.run(run_mcp_command(final_prompt, show_tool_call=display_tool_call))
+                    response, usage = asyncio.run(run_mcp_command(final_prompt, show_tool_call=display_tool_call))
                     status.update(label="Run Complete!", state="complete", expanded=False)
                 
-                st.chat_message("assistant").markdown(response)
+                with st.chat_message("assistant"):
+                    st.markdown(response)
+                    if usage:
+                        st.caption(f"📊 Tokens: {usage.get('total_tokens', 0)} (Prompt: {usage.get('prompt_tokens', 0)}, Completion: {usage.get('completion_tokens', 0)})")
             elif not config.get("inputs"):
                 with st.chat_message("assistant"):
                     with st.spinner("Executing..."):
-                        response = asyncio.run(run_mcp_command(config["prompt"], show_tool_call=display_tool_call))
+                        response, usage = asyncio.run(run_mcp_command(config["prompt"], show_tool_call=display_tool_call))
                         st.markdown(response)
+                        if usage:
+                            st.caption(f"📊 Tokens: {usage.get('total_tokens', 0)} (Prompt: {usage.get('prompt_tokens', 0)}, Completion: {usage.get('completion_tokens', 0)})")
             else:
                 st.error("⚠️ Please provide all required parameters above.")

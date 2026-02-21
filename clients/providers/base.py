@@ -36,12 +36,12 @@ class LLMProvider(ABC):
         tools: list,
         call_tool: Callable[[str, dict], Awaitable[str]],
         tools_used: list,
-    ) -> str:
+    ) -> tuple[str, dict]:
         """
         Run one conversational turn with the LLM.
 
-        Returns the final text response after all tool calls have been
-        resolved.
+        Returns a tuple of (final_text_response, usage_metadata) after 
+        all tool calls have been resolved.
         """
         ...
 

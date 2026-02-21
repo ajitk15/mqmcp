@@ -235,7 +235,7 @@ class DynamicMQClient:
             
         return None
         
-    async def handle_user_input(self, user_input: str) -> str:
+    async def handle_user_input(self, user_input: str) -> Tuple[str, Dict]:
         """
         Process user input and dynamically call the appropriate MCP tool.
         
@@ -252,7 +252,7 @@ class DynamicMQClient:
         intent, params = self.detect_intent(user_input)
         
         if intent == 'unknown':
-            return self._handle_unknown_intent(user_input)
+            return self._handle_unknown_intent(user_input), {}
             
         # Extract queue manager if needed
         qmgr = self.extract_queue_manager(user_input)
@@ -263,37 +263,33 @@ class DynamicMQClient:
         
         # Route to appropriate handler
         if intent == 'list_qmgrs':
-            return await self._handle_list_qmgrs()
+            res = await self._handle_list_qmgrs()
         elif intent == 'check_queue_depth':
             queue_name = params.get('entity', 'UNKNOWN')
-            return await self._handle_check_queue_depth(qmgr, queue_name, user_input)
+            res = await self._handle_check_queue_depth(qmgr, queue_name, user_input)
         elif intent == 'list_queues':
-            # Smart flow: Check hostname first, then search
-            return await self._handle_list_queues_smart(qmgr, user_input)
+            res = await self._handle_list_queues_smart(qmgr, user_input)
         elif intent == 'list_channels':
-            return await self._handle_list_channels(qmgr, user_input)
+            res = await self._handle_list_channels(qmgr, user_input)
         elif intent == 'queue_status':
             queue_name = params.get('entity', 'UNKNOWN')
-            return await self._handle_queue_status(qmgr, queue_name, user_input)
+            res = await self._handle_queue_status(qmgr, queue_name, user_input)
         elif intent == 'channel_status':
             channel_name = params.get('entity', 'UNKNOWN')
-            return await self._handle_channel_status(qmgr, channel_name, user_input)
-            
+            res = await self._handle_channel_status(qmgr, channel_name, user_input)
         elif intent == 'listener_status':
-            return await self._handle_listener_status(qmgr, user_input)
-            
+            res = await self._handle_listener_status(qmgr, user_input)
         elif intent == 'qmgr_props':
-            return await self._handle_qmgr_props(qmgr, user_input)
-            
+            res = await self._handle_qmgr_props(qmgr, user_input)
         elif intent == 'check_version':
-            return await self._handle_check_version()
-            
+            res = await self._handle_check_version()
         elif intent == 'search_resource':
             query = params.get('entity', 'UNKNOWN')
-            return await self._handle_search(query, user_input)
-            
+            res = await self._handle_search(query, user_input)
         else:
-            return "I'm not sure how to help with that. Try asking to list queue managers or check a queue depth."
+            return "I'm not sure how to help with that. Try asking to list queue managers or check a queue depth.", {}
+            
+        return res, {}
 
     def _get_rest_api_url(self, tool_name: str, args: dict) -> str:
         """Construct the IBM MQ REST API URL for a given tool call"""
@@ -365,8 +361,8 @@ class DynamicMQClient:
                 import re
                 qmgrs = set()
                 for line in search_text.split('\n'):
-                    # Match "Queue Manager: QM1 | ..."
-                    match = re.search(r'Queue Manager:\s*([A-Z0-9_\.]+)', line, re.IGNORECASE)
+                    # Match "QM:QM1 Host:..."
+                    match = re.search(r'QM:\s*([A-Z0-9_\.]+)', line, re.IGNORECASE)
                     if match:
                         qmgrs.add(match.group(1).strip())
                 
@@ -577,7 +573,7 @@ class DynamicMQClient:
             # Load allowed prefixes from environment
             allowed_prefixes_str = os.getenv("MQ_ALLOWED_HOSTNAME_PREFIXES", "lod,loq,lot")
             allowed_prefixes = [p.strip().lower() for p in allowed_prefixes_str.split(",")]
-            print(f"    Allowed hostname prefixes: {', '.join(allowed_prefixes)}")
+            #print(f"    Allowed hostname prefixes: {', '.join(allowed_prefixes)}")
             
             # Read the CSV file to find the hostname
             csv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "resources", "qmgr_dump.csv")
@@ -617,7 +613,7 @@ Hostname: {hostname}
 This hostname is not in the allowed list.
 Allowed hostname prefixes: {allowed_list}
 
-Please use non-production environments (e.g., lod*, loq*, lot*) for queries."""
+Please use non-production environments for queries."""
                 
                 return f"**Tool:** Hostname Pre-Check\n**Query:** `{qmgr}`\n\n**Result:**\n{blocking_msg}"
             
@@ -697,7 +693,7 @@ Queue Status:
                     continue
                     
                 # Process the input
-                response = await self.handle_user_input(user_input)
+                response, usage = await self.handle_user_input(user_input)
                 print(f"[ASSISTANT] Response:\n{response}")
                 
             except KeyboardInterrupt:

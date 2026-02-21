@@ -14,7 +14,8 @@ try:
 except ImportError:
     HAS_GEMINI = False
 
-_MODEL = "gemini-2.0-flash"
+import os
+_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
 
 class GeminiProvider(LLMProvider):
@@ -63,17 +64,18 @@ class GeminiProvider(LLMProvider):
         tools: list,
         call_tool: Callable[[str, dict], Awaitable[str]],
         tools_used: list,
-    ) -> str:
+    ) -> tuple[str, dict]:
         if not HAS_GEMINI:
             return (
                 "❌ Google Generative AI library not installed. "
-                "Run: pip install google-generativeai"
+                "Run: pip install google-generativeai",
+                {}
             )
 
         import os
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
-            return "❌ GEMINI_API_KEY environment variable not set"
+            return "❌ GEMINI_API_KEY environment variable not set", {}
 
         from mq_tools.prompts import MQ_SYSTEM_PROMPT
 
@@ -99,21 +101,33 @@ class GeminiProvider(LLMProvider):
         # Track user message in shared history
         conversation_history.append({"role": "user", "content": user_input})
 
+        # Prune history — keep last 10 messages (user/assistant)
+        if len(conversation_history) > 10:
+            conversation_history[:] = conversation_history[-10:]
+
         print(f"🤖 Asking {self.name} ({_MODEL})…")
         max_iterations = 10
         current_message: object = user_input
+        total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
         for iteration in range(1, max_iterations + 1):
             print(f"   [Iteration {iteration}]")
 
             response = chat.send_message(current_message)
+            
+            # Accumulate usage
+            if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                total_usage["prompt_tokens"] += response.usage_metadata.prompt_token_count
+                total_usage["completion_tokens"] += response.usage_metadata.candidates_token_count
+                total_usage["total_tokens"] += response.usage_metadata.total_token_count
+
             part = response.candidates[0].content.parts[0]
 
             if not (hasattr(part, "function_call") and part.function_call.name):
                 # Plain text — done
                 final_text = part.text
                 conversation_history.append({"role": "assistant", "content": final_text})
-                return final_text
+                return final_text, total_usage
 
             fn = part.function_call
             tool_name = fn.name
@@ -135,4 +149,4 @@ class GeminiProvider(LLMProvider):
                 ]
             )
 
-        return "❌ Maximum tool call iterations reached."
+        return "❌ Maximum tool call iterations reached.", total_usage

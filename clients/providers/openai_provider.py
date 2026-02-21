@@ -15,7 +15,8 @@ try:
 except ImportError:
     HAS_OPENAI = False
 
-_MODEL = "gpt-4-turbo-preview"
+import os
+_MODEL = os.getenv("OPENAI_MODEL", "gpt-4-turbo-preview")
 
 
 class OpenAIProvider(LLMProvider):
@@ -32,14 +33,14 @@ class OpenAIProvider(LLMProvider):
         tools: list,
         call_tool: Callable[[str, dict], Awaitable[str]],
         tools_used: list,
-    ) -> str:
+    ) -> tuple[str, dict]:
         if not HAS_OPENAI:
-            return "❌ OpenAI library not installed. Run: pip install openai"
+            return "❌ OpenAI library not installed. Run: pip install openai", {}
 
         import os
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
-            return "❌ OPENAI_API_KEY environment variable not set"
+            return "❌ OPENAI_API_KEY environment variable not set", {}
 
         from mq_tools.prompts import MQ_SYSTEM_PROMPT
 
@@ -48,8 +49,13 @@ class OpenAIProvider(LLMProvider):
         # Add user message to history
         conversation_history.append({"role": "user", "content": user_input})
 
+        # Prune history — keep last 10 messages (user/assistant/tool)
+        if len(conversation_history) > 10:
+            conversation_history[:] = conversation_history[-10:]
+
         print(f"🤖 Asking {self.name} ({_MODEL})…")
         max_iterations = 10
+        total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
         for iteration in range(1, max_iterations + 1):
             print(f"   [Iteration {iteration}]")
@@ -63,13 +69,20 @@ class OpenAIProvider(LLMProvider):
                 tools=tools,
                 tool_choice="auto",
             )
+            
+            # Accumulate usage
+            if hasattr(response, 'usage') and response.usage:
+                total_usage["prompt_tokens"] += response.usage.prompt_tokens
+                total_usage["completion_tokens"] += response.usage.completion_tokens
+                total_usage["total_tokens"] += response.usage.total_tokens
+
             message = response.choices[0].message
 
             if not message.tool_calls:
                 # Final text response
                 final_text = message.content or ""
                 conversation_history.append({"role": "assistant", "content": final_text})
-                return final_text
+                return final_text, total_usage
 
             print(f"🔧 {self.name} decided to call tools…")
             conversation_history.append(message)
@@ -91,4 +104,4 @@ class OpenAIProvider(LLMProvider):
                     }
                 )
 
-        return "❌ Maximum tool call iterations reached."
+        return "❌ Maximum tool call iterations reached.", total_usage

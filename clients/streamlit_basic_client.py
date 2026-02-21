@@ -29,18 +29,18 @@ async def run_mcp_command(prompt, show_tool_call=None):
                     show_tool_call(tool_name, args)
                 client._log_tool_call = new_log
             
-            response = await client.handle_user_input(prompt)
-            return response
+            response, usage = await client.handle_user_input(prompt)
+            return response, usage
         finally:
             builtins.input = original_input
             await client.disconnect()
     except Exception as e:
-        return f"❌ Error: {str(e)}"
+        return f"❌ Error: {str(e)}", {}
 
 # Connectivity Check logic
 mcp_status_html = '<span style="color: #ffcccc;">🔘 Checking...</span>'
 try:
-    res = asyncio.run(run_mcp_command("dspmq"))
+    res, _ = asyncio.run(run_mcp_command("dspmq"))
     if "❌" in res:
         mcp_status_html = '<span style="color: #ff9999;">🔴 MCP Offline</span>'
     else:
@@ -162,13 +162,15 @@ st.markdown("""
 # Chat interface initialization
 if "messages_basic" not in st.session_state:
     st.session_state.messages_basic = [
-        {"role": "assistant", "content": "I'm your IBM MQ assistant. I'm connected and ready! Try asking 'list queue managers' or 'what is the depth of MY.QUEUE on QM1?'"}
+        {"role": "assistant", "content": "I'm your IBM MQ assistant. I'm connected and ready! Try asking 'list queue managers' or 'what is the depth of MY.QUEUE on QM1?'", "usage": {}}
     ]
 
 # Display chat messages
 for message in st.session_state.messages_basic:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
+        if "usage" in message and message["usage"]:
+            st.caption(f"📊 Tokens: {message['usage'].get('total_tokens', 0)} (Prompt: {message['usage'].get('prompt_tokens', 0)}, Completion: {message['usage'].get('completion_tokens', 0)})")
 
 # User input
 if prompt := st.chat_input("Ask something about IBM MQ..."):
@@ -190,8 +192,14 @@ if prompt := st.chat_input("Ask something about IBM MQ..."):
         """, unsafe_allow_html=True)
         
         # Execute the command with tool logging callback
-        full_response = asyncio.run(run_mcp_command(prompt, show_tool_call=display_tool_call))
+        full_response, usage = asyncio.run(run_mcp_command(prompt, show_tool_call=display_tool_call))
         message_placeholder.markdown(full_response)
+        if usage:
+            st.caption(f"📊 Tokens: {usage.get('total_tokens', 0)} (Prompt: {usage.get('prompt_tokens', 0)}, Completion: {usage.get('completion_tokens', 0)})")
     
     # Add assistant response to chat history
-    st.session_state.messages_basic.append({"role": "assistant", "content": full_response})
+    st.session_state.messages_basic.append({
+        "role": "assistant", 
+        "content": full_response,
+        "usage": usage
+    })

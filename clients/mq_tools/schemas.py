@@ -17,48 +17,47 @@ Import examples:
 _TOOLS_CORE = [
     {
         "name": "dspmq",
-        "description": "List all IBM MQ queue managers and their running status (running/stopped)",
+        "description": "List QMs and status.",
         "parameters": {},
         "required": [],
     },
     {
         "name": "dspmqver",
-        "description": "Get IBM MQ version, build level, and installation path details",
+        "description": "Get MQ version details.",
         "parameters": {},
         "required": [],
     },
     {
         "name": "runmqsc",
-        "description": (
-            "Execute an MQSC command on a specific IBM MQ queue manager. "
-            "Use this for operations like checking queue depth, listing queues, "
-            "displaying channels, etc."
-        ),
+        "description": "Run MQSC command.",
         "parameters": {
             "qmgr_name": {
                 "type": "string",
-                "description": "Name of the queue manager (e.g., 'QM1', 'PROD_QM')",
+                "description": "QM name",
             },
             "mqsc_command": {
                 "type": "string",
-                "description": (
-                    "MQSC command to execute. Examples: "
-                    "'DISPLAY QLOCAL(*)' to list all queues, "
-                    "'DISPLAY QLOCAL(MYQUEUE) CURDEPTH' to check queue depth, "
-                    "'DISPLAY CHANNEL(*)' to list channels"
-                ),
+                "description": "MQSC cmd",
+            },
+            "hostname": {
+                "type": "string",
+                "description": "Host from search_qmgr_dump",
             },
         },
         "required": ["qmgr_name", "mqsc_command"],
     },
     {
         "name": "search_qmgr_dump",
-        "description": "Search the queue manager dump for a specific string across all columns",
+        "description": "Search QM dump for object host.",
         "parameters": {
             "search_string": {
                 "type": "string",
-                "description": "The string to search for in the queue manager data",
-            }
+                "description": "String to search",
+            },
+            "object_type": {
+                "type": "string",
+                "description": "Optional: QMGR, QLOCAL, QREMOTE, QMODEL, QALIAS, CHANNEL, QUEUES (all Q* types), etc.",
+            },
         },
         "required": ["search_string"],
     },

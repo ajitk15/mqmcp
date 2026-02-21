@@ -36,7 +36,7 @@ st.set_page_config(page_title="IBM MQ Remote AI Assistant", page_icon="🌐", la
 
 # Initialize session state
 if "mcp_endpoint" not in st.session_state:
-    st.session_state.mcp_endpoint = "http://localhost:5000/sse"
+    st.session_state.mcp_endpoint = "http://127.0.0.1:5000/sse"
 if "openai_api_key" not in st.session_state:
     st.session_state.openai_api_key = os.getenv("OPENAI_API_KEY", "")
 if "anthropic_api_key" not in st.session_state:
@@ -109,15 +109,24 @@ async def handle_ai_conversation(user_message, endpoint, api_key):
     messages.append({"role": "user", "content": user_message})
 
     try:
+        from openai import OpenAI
         client = OpenAI(api_key=api_key)
         tools_used = []
+        total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
+        model_name = os.getenv("OPENAI_MODEL", "gpt-4")
         response = client.chat.completions.create(
-            model="gpt-4",
+            model=model_name,
             messages=messages,
             tools=openai_tools,
             tool_choice="auto",
         )
+        
+        if hasattr(response, 'usage') and response.usage:
+            total_usage["prompt_tokens"] += response.usage.prompt_tokens
+            total_usage["completion_tokens"] += response.usage.completion_tokens
+            total_usage["total_tokens"] += response.usage.total_tokens
+
         response_message = response.choices[0].message
 
         while response_message.tool_calls:
@@ -134,17 +143,23 @@ async def handle_ai_conversation(user_message, endpoint, api_key):
                     "content": tool_result,
                 })
             response = client.chat.completions.create(
-                model="gpt-4",
+                model=model_name,
                 messages=messages,
                 tools=openai_tools,
                 tool_choice="auto",
             )
+            
+            if hasattr(response, 'usage') and response.usage:
+                total_usage["prompt_tokens"] += response.usage.prompt_tokens
+                total_usage["completion_tokens"] += response.usage.completion_tokens
+                total_usage["total_tokens"] += response.usage.total_tokens
+
             response_message = response.choices[0].message
 
-        return tools_used, response_message.content
+        return tools_used, response_message.content, total_usage
     except Exception as e:
         import traceback
-        return None, f"❌ Error: {str(e)}\n\n{traceback.format_exc()}"
+        return None, f"❌ Error: {str(e)}\n\n{traceback.format_exc()}", {}
 
 
 async def handle_ai_conversation_anthropic(user_message, endpoint, api_key):
@@ -171,21 +186,29 @@ async def handle_ai_conversation_anthropic(user_message, endpoint, api_key):
     try:
         client = anthropic_sdk.Anthropic(api_key=api_key)
         tools_used = []
+        total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         max_iterations = 10
 
         for _ in range(max_iterations):
+            model_name = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
             response = client.messages.create(
-                model="claude-3-5-sonnet-20241022",
+                model=model_name,
                 max_tokens=2048,
                 system=MQ_SYSTEM_PROMPT,
                 tools=anthropic_tools,
                 messages=history,
             )
+            
+            # Accumulate usage
+            if hasattr(response, 'usage') and response.usage:
+                total_usage["prompt_tokens"] += response.usage.input_tokens
+                total_usage["completion_tokens"] += response.usage.output_tokens
+                total_usage["total_tokens"] = total_usage["prompt_tokens"] + total_usage["completion_tokens"]
 
             has_tool_use = any(b.type == "tool_use" for b in response.content)
             if not has_tool_use:
                 final_text = next((b.text for b in response.content if hasattr(b, "text")), "")
-                return tools_used, final_text
+                return tools_used, final_text, total_usage
 
             # Append assistant turn
             history.append({"role": "assistant", "content": response.content})
@@ -202,10 +225,10 @@ async def handle_ai_conversation_anthropic(user_message, endpoint, api_key):
                     })
             history.append({"role": "user", "content": tool_results})
 
-        return tools_used, "❌ Max tool calls exceeded."
+        return tools_used, "❌ Max tool calls exceeded.", total_usage
     except Exception as e:
         import traceback
-        return None, f"❌ Error: {str(e)}\n\n{traceback.format_exc()}"
+        return None, f"❌ Error: {str(e)}\n\n{traceback.format_exc()}", {}
 
 
 async def handle_ai_conversation_gemini(user_message, endpoint, api_key):
@@ -223,8 +246,9 @@ async def handle_ai_conversation_gemini(user_message, endpoint, api_key):
     genai.configure(api_key=api_key)
     tool_declarations = to_gemini_declarations(st.session_state.mcp_tools)
 
+    model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
     model = genai.GenerativeModel(
-        model_name="gemini-2.0-flash",
+        model_name=model_name,
         system_instruction=MQ_SYSTEM_PROMPT,
         tools=tool_declarations,
     )
@@ -242,9 +266,17 @@ async def handle_ai_conversation_gemini(user_message, endpoint, api_key):
         tools_used = []
         current_message = user_message
         max_iterations = 10
+        total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
         for _ in range(max_iterations):
             response = chat.send_message(current_message)
+            
+            # Accumulate usage
+            if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                total_usage["prompt_tokens"] += response.usage_metadata.prompt_token_count
+                total_usage["completion_tokens"] += response.usage_metadata.candidates_token_count
+                total_usage["total_tokens"] += response.usage_metadata.total_token_count
+
             part = response.candidates[0].content.parts[0]
 
             if hasattr(part, "function_call") and part.function_call.name:
@@ -263,12 +295,12 @@ async def handle_ai_conversation_gemini(user_message, endpoint, api_key):
                     )]
                 )
             else:
-                return tools_used, part.text
+                return tools_used, part.text, total_usage
 
-        return tools_used, "❌ Max tool calls exceeded."
+        return tools_used, "❌ Max tool calls exceeded.", total_usage
     except Exception as e:
         import traceback
-        return None, f"❌ Error: {str(e)}\n\n{traceback.format_exc()}"
+        return None, f"❌ Error: {str(e)}\n\n{traceback.format_exc()}", {}
 
 
 # CUSTOM CSS & GLOBAL UI COMPONENTS
@@ -459,9 +491,14 @@ with st.sidebar:
 for message in st.session_state.messages_remote:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
+        
+        # Display token usage if available (only if no tools, to avoid redundancy)
+        if "usage" in message and message["usage"] and not message.get("tools_used"):
+            st.caption(f"📊 Tokens: {message['usage'].get('total_tokens', 0)} (Prompt: {message['usage'].get('prompt_tokens', 0)}, Completion: {message['usage'].get('completion_tokens', 0)})")
+
         # Display tools used if available
-        if "tools_used" in message and message["tools_used"]:
-            with st.expander("🔧 Tools Used by AI"):
+        if "tools_used" in message and message["tools_used"] and should_show_logging():
+            with st.expander("🔧 Tools Used (in order)"):
                 for idx, tool in enumerate(message["tools_used"], 1):
                     col1, col2 = st.columns([1, 4])
                     with col1:
@@ -476,6 +513,11 @@ for message in st.session_state.messages_remote:
                     if should_show_logging():
                         rest_endpoint = get_rest_api_url(tool['name'], tool.get('args', {}))
                         st.code(rest_endpoint, language="text")
+                
+                # Show token usage inside expander
+                if "usage" in message and message["usage"]:
+                    st.divider()
+                    st.caption(f"📊 **Token Usage:** {message['usage'].get('total_tokens', 0)} total ({message['usage'].get('prompt_tokens', 0)} prompt, {message['usage'].get('completion_tokens', 0)} completion)")
 
 # User input
 if prompt := st.chat_input("Ask something about IBM MQ..."):
@@ -519,7 +561,7 @@ if prompt := st.chat_input("Ask something about IBM MQ..."):
                     "gemini": (handle_ai_conversation_gemini, st.session_state.gemini_api_key),
                 }
                 handler, active_key = handler_map[provider]
-                tools_used, full_response = asyncio.run(
+                tools_used, full_response, usage = asyncio.run(
                     handler(
                         prompt, 
                         st.session_state.mcp_endpoint,
@@ -530,11 +572,14 @@ if prompt := st.chat_input("Ask something about IBM MQ..."):
                 import traceback
                 tools_used = None
                 full_response = f"❌ Error: {str(e)}\n\n{traceback.format_exc()}"
+                usage = {}
             
             message_placeholder.markdown(full_response)
+            if usage and not tools_used:
+                st.caption(f"📊 Tokens: {usage.get('total_tokens', 0)} (Prompt: {usage.get('prompt_tokens', 0)}, Completion: {usage.get('completion_tokens', 0)})")
             
             # Display tools used
-            if tools_used:
+            if tools_used and should_show_logging():
                 with tools_placeholder.expander("🔧 Tools Used by AI"):
                     for idx, tool in enumerate(tools_used, 1):
                         col1, col2 = st.columns([1, 4])
@@ -550,10 +595,16 @@ if prompt := st.chat_input("Ask something about IBM MQ..."):
                         if should_show_logging():
                             rest_endpoint = get_rest_api_url(tool['name'], tool.get('args', {}))
                             st.code(rest_endpoint, language="text")
+                    
+                    # Show token usage inside expander
+                    if usage:
+                        st.divider()
+                        st.caption(f"📊 **Token Usage:** {usage.get('total_tokens', 0)} total ({usage.get('prompt_tokens', 0)} prompt, {usage.get('completion_tokens', 0)} completion)")
         
         # Add assistant response to chat history with tools used
         st.session_state.messages_remote.append({
             "role": "assistant", 
             "content": full_response,
-            "tools_used": tools_used
+            "tools_used": tools_used,
+            "usage": usage
         })

@@ -123,17 +123,17 @@ def extract_qmgrs_from_search(search_output: str) -> list:
     import re
     qmgrs = set()
     for line in search_output.split('\n'):
-        match = re.search(r'Queue Manager:\s*([A-Z0-9_\.]+)', line, re.IGNORECASE)
+        match = re.search(r'QM:\s*([A-Z0-9_\.]+)', line, re.IGNORECASE)
         if match:
             qmgrs.add(match.group(1).strip())
     return list(qmgrs)
 
 
 def render_tool_call(tool_name: str, args: dict, result: str, expanded: bool = True, label: str = ""):
-    """Render a standardised 'Tool Called' expander block.
+    """Render a standardised 'Tool Called' block.
     
-    tool_name  - actual MCP tool name, used for REST API URL lookup
-    label      - optional display title override (e.g. 'runmqsc on MQQMGR1')
+    In manual SSE mode, we show the call details in an expander, 
+    but the final output is also displayed for clarity.
     """
     display = label or tool_name
     with st.expander(f"🔧 Tool Called: `{display}`", expanded=expanded):
@@ -141,8 +141,9 @@ def render_tool_call(tool_name: str, args: dict, result: str, expanded: bool = T
         st.json(args)
         if should_show_logging():
             st.code(get_rest_api_url(tool_name, args), language="text")
-        st.markdown("**Output:**")
-        if "❌ Error" in result:
+        
+        # We always show the output inside the expander as a fallback
+        if "❌" in result:
             st.error(result)
         else:
             st.code(result, language="text")
@@ -314,7 +315,8 @@ if choice and choice != "Select an operation...":
                         # Step 1: Search
                         search_args = {"search_string": queue_name}
                         search_res = asyncio.run(call_mcp_tool(st.session_state.server_url, "search_qmgr_dump", search_args))
-                        render_tool_call("search_qmgr_dump", search_args, search_res)
+                        if should_show_logging():
+                            render_tool_call("search_qmgr_dump", search_args, search_res)
 
                         # Step 2: Parse QMGRs
                         qmgrs = extract_qmgrs_from_search(search_res)
@@ -330,7 +332,15 @@ if choice and choice != "Select an operation...":
                                 runmqsc_args = {"qmgr_name": qmgr, "mqsc_command": cmd}
                                 with st.spinner(f"Running runmqsc on {qmgr}..."):
                                     res = asyncio.run(call_mcp_tool(st.session_state.server_url, "runmqsc", runmqsc_args))
-                                render_tool_call("runmqsc", runmqsc_args, res, label=f"runmqsc on {qmgr}")
+                                if should_show_logging():
+                                    render_tool_call("runmqsc", runmqsc_args, res, label=f"runmqsc on {qmgr}")
+                                else:
+                                    # Still show results but without technical details if logging is off
+                                    st.markdown(f"#### 📦 Results from `{qmgr}`")
+                                    if "❌" in res:
+                                        st.error(res)
+                                    else:
+                                        st.code(res, language="text")
 
                 st.stop()  # End execution after smart workflow
 
@@ -338,6 +348,13 @@ if choice and choice != "Select an operation...":
             with st.spinner(f"Running {op_config['tool']}..."):
                 result = asyncio.run(call_mcp_tool(st.session_state.server_url, op_config["tool"], final_args))
 
-            render_tool_call(op_config["tool"], final_args, result)
-            if "❌ Error" not in result:
+            if should_show_logging():
+                render_tool_call(op_config["tool"], final_args, result, expanded=False)
+            
+            # Display final result prominently
+            st.markdown("### 🏁 Final Result")
+            if "❌" in result or "🚫" in result:
+                st.error(result)
+            else:
+                st.code(result, language="text")
                 st.success("Command Executed Successfully")

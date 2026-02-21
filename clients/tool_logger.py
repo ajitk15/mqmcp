@@ -40,8 +40,15 @@ def get_rest_api_url(tool_name: str, args: dict) -> str:
         return f"{base_url}installation"
     elif tool_name == "runmqsc":
         qmgr = args.get('qmgr_name', 'UNKNOWN')
-        url_with_qmgr_host = base_url.replace('localhost', qmgr)
-        return f"{url_with_qmgr_host}action/qmgr/{qmgr}/mqsc"
+        host = args.get('hostname')
+        if host:
+            # AI explicitly passed a host from search results
+            url_with_actual_host = base_url.replace('localhost', host)
+            return f"{url_with_actual_host}action/qmgr/{qmgr}/mqsc"
+        else:
+            # Fallback display: use QM name as host (most common in small labs)
+            url_with_qmgr_host = base_url.replace('localhost', qmgr)
+            return f"{url_with_qmgr_host}action/qmgr/{qmgr}/mqsc (Auto-routed)"
     elif tool_name == "search_qmgr_dump":
         return "[CSV File] resources/qmgr_dump.csv"
     else:

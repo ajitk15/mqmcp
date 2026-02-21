@@ -14,7 +14,8 @@ try:
 except ImportError:
     HAS_ANTHROPIC = False
 
-_MODEL = "claude-3-5-sonnet-20241022"
+import os
+_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
 
 
 class AnthropicProvider(LLMProvider):
@@ -31,24 +32,29 @@ class AnthropicProvider(LLMProvider):
         tools: list,
         call_tool: Callable[[str, dict], Awaitable[str]],
         tools_used: list,
-    ) -> str:
+    ) -> tuple[str, dict]:
         if not HAS_ANTHROPIC:
-            return "❌ Anthropic library not installed. Run: pip install anthropic"
+            return "❌ Anthropic library not installed. Run: pip install anthropic", {}
 
         import os
         api_key = os.getenv("ANTHROPIC_API_KEY")
         if not api_key:
-            return "❌ ANTHROPIC_API_KEY environment variable not set"
+            return "❌ ANTHROPIC_API_KEY environment variable not set", {}
 
         from mq_tools.prompts import MQ_SYSTEM_PROMPT
 
         client = _anthropic_sdk.Anthropic(api_key=api_key)
 
-        # Add user message to history
+        # Track user message in shared history
         conversation_history.append({"role": "user", "content": user_input})
+
+        # Prune history — keep last 10 messages (user/assistant)
+        if len(conversation_history) > 10:
+            conversation_history[:] = conversation_history[-10:]
 
         print(f"🤖 Asking {self.name} ({_MODEL})…")
         max_iterations = 10
+        total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
         for iteration in range(1, max_iterations + 1):
             print(f"   [Iteration {iteration}]")
@@ -60,6 +66,12 @@ class AnthropicProvider(LLMProvider):
                 tools=tools,
                 messages=conversation_history,
             )
+            
+            # Accumulate usage
+            if hasattr(response, 'usage') and response.usage:
+                total_usage["prompt_tokens"] += response.usage.input_tokens
+                total_usage["completion_tokens"] += response.usage.output_tokens
+                total_usage["total_tokens"] = total_usage["prompt_tokens"] + total_usage["completion_tokens"]
 
             has_tool_use = any(block.type == "tool_use" for block in response.content)
 
@@ -68,7 +80,7 @@ class AnthropicProvider(LLMProvider):
                     (b.text for b in response.content if hasattr(b, "text")), ""
                 )
                 conversation_history.append({"role": "assistant", "content": final_text})
-                return final_text
+                return final_text, total_usage
 
             print(f"🔧 {self.name} decided to call tools…")
 
@@ -97,4 +109,4 @@ class AnthropicProvider(LLMProvider):
 
             conversation_history.append({"role": "user", "content": tool_results})
 
-        return "❌ Maximum tool call iterations reached."
+        return "❌ Maximum tool call iterations reached.", total_usage
