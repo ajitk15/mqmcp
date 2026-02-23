@@ -15,6 +15,7 @@ A powerful and user-friendly **Model Context Protocol (MCP)** server for IBM MQ,
 *   🔍 **Tool Transparency**: Configurable logging shows which MCP tools are called and their REST API endpoints.
 *   🤖 **Multiple Interfaces**: Choose between Pattern-based (Basic), AI-powered (OpenAI / Anthropic / Gemini), Guided (One-click), or SSE (Real-time).
 *   🌐 **Universal REST Support**: Fully integrated with the IBM MQ REST API (mqweb), supporting both Distributed and z/OS managers.
+*   🔌 **UI-Agnostic API Gateway**: A decoupled FastAPI backend that provides a single `POST /api/v1/chat` endpoint and comes with a built-in static Web Chatbot.
 
 ---
 
@@ -126,7 +127,9 @@ Choose your preferred flavor of the assistant:
 
 | Assistant | Command | Best For... |
 | :--- | :--- | :--- |
-| **Unified Launch** | `.\run_all_assistants.bat` | **Launches ALL clients simultaneously.** |
+| **API Gateway Backend** | `cd api && uvicorn main:app --reload` | Headless API serving LangGraph via `/api/v1/chat` (port 8000). |
+| **Web Chatbot UI** | `.\run_frontend.bat` | **Recommended.** Decoupled HTML/JS frontend hitting the API Gateway (port 8001). |
+| **Unified Launch** | `.\run_all_assistants.bat` | **Launches ALL Streamlit clients simultaneously.** |
 | **Guided Assistant** | `streamlit run clients/streamlit_guided_client.py` | One-click ops & guided troubleshooting. |
 | **AI Assistant (OpenAI)** | `streamlit run clients/streamlit_openai_client.py` | Natural conversations, Cluster support. |
 | **Remote AI Assistant** | `streamlit run clients/streamlit_remote_client.py` | OpenAI / Anthropic / Gemini via SSE endpoint. |
