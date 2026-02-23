@@ -312,8 +312,13 @@ async def runmqsc(qmgr_name: str, mqsc_command: str, hostname: str | None = None
     # Use json.dumps to safely serialise the command
     data = json.dumps({"type": "runCommand", "parameters": {"command": mqsc_command}})
 
-    # Replace 'localhost' with the actual mapped hostname from CSV
-    url_with_host = URL_BASE.replace("localhost", target_hostname)
+    # Replace the hostname in URL_BASE with the actual mapped hostname from CSV
+    from urllib.parse import urlparse
+    parsed = urlparse(URL_BASE)
+    # Reconstruct netloc preserving the original port if it exists
+    new_netloc = f"{target_hostname}:{parsed.port}" if parsed.port else target_hostname
+    url_with_host = parsed._replace(netloc=new_netloc).geturl()
+    
     url = url_with_host + "action/qmgr/" + qmgr_name + "/mqsc"
 
     auth = httpx.BasicAuth(username=USER_NAME, password=PASSWORD)
