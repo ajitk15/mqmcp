@@ -35,8 +35,16 @@ def get_rest_api_url(tool_name: str, args: dict) -> str:
     base_url = os.getenv("MQ_URL_BASE", "https://localhost:9443/ibmmq/rest/v3/admin/")
 
     if tool_name == "dspmq":
+        qmgr = args.get('qmgr_name')
+        if qmgr:
+            url_with_qmgr_host = base_url.replace('localhost', qmgr)
+            return f"{url_with_qmgr_host}qmgr/ (Auto-routed)"
         return f"{base_url}qmgr/"
     elif tool_name == "dspmqver":
+        qmgr = args.get('qmgr_name')
+        if qmgr:
+            url_with_qmgr_host = base_url.replace('localhost', qmgr)
+            return f"{url_with_qmgr_host}installation (Auto-routed)"
         return f"{base_url}installation"
     elif tool_name == "runmqsc":
         qmgr = args.get('qmgr_name', 'UNKNOWN')

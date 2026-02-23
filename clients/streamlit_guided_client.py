@@ -142,15 +142,19 @@ st.markdown(f"""
 QUESTIONS = {
     "Select an operation...": {},
     "--- Infrastructure ---": {"header": True, "icon": "🏢"},
-    "List all Queue Managers": {
-        "prompt": "list all queue managers",
-        "inputs": [],
-        "description": "Show all MQ queue managers on this host and their status."
+    "List Queue Managers": {
+        "prompt": "dspmq",
+        "inputs": ["qmgr"],
+        "description": "Show all MQ queue managers on this host and their status.",
+        "requires_qm": True,
+        "requires_queue": False
     },
-    "Check MQ Version": {
+    "Show mq version": {
         "prompt": "dspmqver",
-        "inputs": [],
-        "description": "Display IBM MQ version, build level, and installation path details."
+        "inputs": ["qmgr"], # Added qmgr input to align with "accept QM parameters"
+        "description": "Show MQ version for a specific queue manager.",
+        "requires_qm": True,
+        "requires_queue": False
     },
     "Show Queue Manager Properties": {
         "prompt": "display qmgr for {qmgr}",

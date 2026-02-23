@@ -217,13 +217,35 @@ def search_qmgr_dump(search_string: str, object_type: str | None = None) -> str:
 
 
 @mcp.tool()
-async def dspmq() -> str:
-    """List available queue managers and whether they are running or not."""
+async def dspmq(qmgr_name: str | None = None) -> str:
+    """List all IBM MQ queue managers and their status.
+    
+    Args:
+        qmgr_name: Optional queue manager name to list all QMs running on its host.
+    """
     headers = {
         "Content-Type": "application/json",
         "ibm-mq-rest-csrf-token": _CSRF_TOKEN,
     }
+    
     url = URL_BASE + "qmgr/"
+    if qmgr_name:
+        df = load_csv()
+        qmgr_matches = df[df["qmgr"].str.upper() == qmgr_name.upper()]
+        if not qmgr_matches.empty:
+            target_hostname = str(qmgr_matches.iloc[0]["hostname"]).strip()
+            allowed, message = is_hostname_allowed(target_hostname)
+            if not allowed:
+                return message
+                
+            from urllib.parse import urlparse
+            parsed = urlparse(URL_BASE)
+            new_netloc = f"{target_hostname}:{parsed.port}" if parsed.port else target_hostname
+            url_with_host = parsed._replace(netloc=new_netloc).geturl()
+            url = url_with_host + "qmgr/"
+        else:
+            return f"❌ Queue Manager '{qmgr_name}' not found in the manifest."
+
     auth = httpx.BasicAuth(username=USER_NAME, password=PASSWORD)
     async with httpx.AsyncClient(verify=False, auth=auth) as client:
         try:
@@ -243,13 +265,36 @@ def prettify_dspmq(payload: bytes) -> str:
 
 
 @mcp.tool()
-async def dspmqver() -> str:
-    """Display IBM MQ version and installation information."""
+async def dspmqver(qmgr_name: str | None = None) -> str:
+    """Display IBM MQ version and installation information.
+
+    Args:
+        qmgr_name: Optional queue manager name to check the specific host version for.
+    """
     headers = {
         "Content-Type": "application/json",
         "ibm-mq-rest-csrf-token": _CSRF_TOKEN,
     }
+    
+    # Establish target URL
     url = URL_BASE + "installation"
+    if qmgr_name:
+        df = load_csv()
+        qmgr_matches = df[df["qmgr"].str.upper() == qmgr_name.upper()]
+        if not qmgr_matches.empty:
+            target_hostname = str(qmgr_matches.iloc[0]["hostname"]).strip()
+            allowed, message = is_hostname_allowed(target_hostname)
+            if not allowed:
+                return message
+                
+            from urllib.parse import urlparse
+            parsed = urlparse(URL_BASE)
+            new_netloc = f"{target_hostname}:{parsed.port}" if parsed.port else target_hostname
+            url_with_host = parsed._replace(netloc=new_netloc).geturl()
+            url = url_with_host + "installation"
+        else:
+            return f"❌ Queue Manager '{qmgr_name}' not found in the manifest."
+
     auth = httpx.BasicAuth(username=USER_NAME, password=PASSWORD)
     async with httpx.AsyncClient(verify=False, auth=auth) as client:
         try:

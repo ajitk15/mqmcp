@@ -18,13 +18,23 @@ _TOOLS_CORE = [
     {
         "name": "dspmq",
         "description": "List QMs and status.",
-        "parameters": {},
+        "parameters": {
+            "qmgr_name": {
+                "type": "string",
+                "description": "Optional QM name to list QMs running on its host",
+            }
+        },
         "required": [],
     },
     {
         "name": "dspmqver",
         "description": "Get MQ version details.",
-        "parameters": {},
+        "parameters": {
+            "qmgr_name": {
+                "type": "string",
+                "description": "Optional QM name to get version for specific host",
+            }
+        },
         "required": [],
     },
     {

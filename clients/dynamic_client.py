@@ -263,7 +263,7 @@ class DynamicMQClient:
         
         # Route to appropriate handler
         if intent == 'list_qmgrs':
-            res = await self._handle_list_qmgrs()
+            res = await self._handle_list_qmgrs(qmgr)
         elif intent == 'check_queue_depth':
             queue_name = params.get('entity', 'UNKNOWN')
             res = await self._handle_check_queue_depth(qmgr, queue_name, user_input)
@@ -282,7 +282,7 @@ class DynamicMQClient:
         elif intent == 'qmgr_props':
             res = await self._handle_qmgr_props(qmgr, user_input)
         elif intent == 'check_version':
-            res = await self._handle_check_version()
+            res = await self._handle_check_version(qmgr)
         elif intent == 'search_resource':
             query = params.get('entity', 'UNKNOWN')
             res = await self._handle_search(query, user_input)
@@ -317,26 +317,38 @@ class DynamicMQClient:
         rest_url = self._get_rest_api_url(tool_name, args)
         print(f"    [REST API] {rest_url}")
             
-    async def _handle_list_qmgrs(self) -> str:
+    async def _handle_list_qmgrs(self, qmgr: Optional[str] = None) -> str:
         """Handle listing queue managers"""
         print("    Detected intent: List Queue Managers")
-        self._log_tool_call("dspmq", {})
+        
+        args = {}
+        if qmgr:
+            print(f"   Queue Manager: {qmgr}")
+            args["qmgr_name"] = qmgr
+            
+        self._log_tool_call("dspmq", args)
         
         try:
             with MetricsTracker(logger, "dspmq", {"interface": "dynamic_client"}):
-                result = await self.session.call_tool("dspmq", {})
+                result = await self.session.call_tool("dspmq", args)
             return f"**Tool:** `dspmq`\n**Command:** `dspmq`\n\n**Result:**\n{result.content[0].text}"
         except Exception as e:
             return f"Error: {e}"
 
-    async def _handle_check_version(self) -> str:
+    async def _handle_check_version(self, qmgr: Optional[str] = None) -> str:
         """Handle checking version"""
         print("    Detected intent: Check Version")
-        self._log_tool_call("dspmqver", {})
+        
+        args = {}
+        if qmgr:
+            print(f"   Queue Manager: {qmgr}")
+            args["qmgr_name"] = qmgr
+            
+        self._log_tool_call("dspmqver", args)
         
         try:
             with MetricsTracker(logger, "dspmqver", {"interface": "dynamic_client"}):
-                result = await self.session.call_tool("dspmqver", {})
+                result = await self.session.call_tool("dspmqver", args)
             return f"**Tool:** `dspmqver`\n**Command:** `dspmqver`\n\n**Result:**\n{result.content[0].text}"
         except Exception as e:
             return f"Error: {e}"

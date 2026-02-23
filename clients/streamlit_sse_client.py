@@ -23,12 +23,12 @@ OPERATIONS = {
     "--- Infrastructure ---": {"header": True},
     "List Queue Managers": {
         "tool": "dspmq",
-        "args": {},
+        "args": {"qmgr_name": "Optional Queue Manager Name"},
         "description": "List all IBM MQ queue managers and their status."
     },
     "Check MQ Version": {
         "tool": "dspmqver",
-        "args": {},
+        "args": {"qmgr_name": "Optional Queue Manager Name"},
         "description": "Display IBM MQ version and installation details."
     },
     "Show Queue Manager Properties": {
