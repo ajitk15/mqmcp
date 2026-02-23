@@ -333,14 +333,14 @@ if choice and choice != "Select an operation...":
                                 with st.spinner(f"Running runmqsc on {qmgr}..."):
                                     res = asyncio.run(call_mcp_tool(st.session_state.server_url, "runmqsc", runmqsc_args))
                                 if should_show_logging():
-                                    render_tool_call("runmqsc", runmqsc_args, res, label=f"runmqsc on {qmgr}")
+                                    render_tool_call("runmqsc", runmqsc_args, res, label=f"runmqsc on {qmgr}", expanded=False)
+                                
+                                # Always show results prominently outside the tool log expander
+                                st.markdown(f"#### 📦 Results from `{qmgr}`")
+                                if "❌" in res:
+                                    st.error(res)
                                 else:
-                                    # Still show results but without technical details if logging is off
-                                    st.markdown(f"#### 📦 Results from `{qmgr}`")
-                                    if "❌" in res:
-                                        st.error(res)
-                                    else:
-                                        st.code(res, language="text")
+                                    st.code(res, language="text")
 
                 st.stop()  # End execution after smart workflow
 
