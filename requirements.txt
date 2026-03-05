@@ -4,3 +4,4 @@ mcp
 streamlit
 python-dotenv
 pandas
+fastapi

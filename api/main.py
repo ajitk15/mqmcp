@@ -3,8 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from langchain_core.messages import HumanMessage
 import uuid
 
-from .models import ChatRequest, ChatResponse
-from .agent import process_chat
+from models import ChatRequest, ChatResponse
+from agent import process_chat
 from fastapi.staticfiles import StaticFiles
 import os
 

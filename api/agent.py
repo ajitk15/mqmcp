@@ -8,7 +8,7 @@ from langgraph.prebuilt import ToolNode
 import json
 from dotenv import load_dotenv
 
-from .mcp_tools import MQ_TOOLS
+from mcp_tools import MQ_TOOLS
 
 load_dotenv()
 
