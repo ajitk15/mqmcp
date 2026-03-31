@@ -40,15 +40,12 @@ load_dotenv(dotenv_path=env_path)
 # ---------------------------------------------------------------------------
 # Configure Logging Setup
 # ---------------------------------------------------------------------------
-log_level_str = os.getenv("MQ_LOG_LEVEL", "INFO").upper()
-log_level = getattr(logging, log_level_str, logging.INFO)
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
-logging.basicConfig(
-    level=log_level,
-    stream=sys.stderr,
-    format="%(levelname)s [%(name)s] %(message)s",
-)
-logger = logging.getLogger("mqmcpserver")
+from utils.logger import get_mcp_logger
+logger = get_mcp_logger()
 
 logger.debug("Loading .env from %s", env_path)
 
