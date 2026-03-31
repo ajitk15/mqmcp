@@ -19,7 +19,7 @@ Start the FastAPI application using `uvicorn`. The `--reload` flag is highly rec
 
 From the **root project directory** (one level up from this folder), run:
 ```bash
-uvicorn api.main:app --reload --host 127.0.0.1 --port 8000
+uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 Once running, you can access:
