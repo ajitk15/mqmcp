@@ -255,13 +255,6 @@ mcp_port = int(os.getenv("MQ_MCP_PORT", 8000))
 mcp = FastMCP("mqmcpserver", host=mcp_host, port=mcp_port)
 
 
-@mcp.resource("qmgr://dump")
-def get_qmgr_dump() -> list:
-    """Return full QMGR dump as JSON."""
-    df = load_csv()
-    return [] if df.empty else df.to_dict(orient="records")
-
-
 @mcp.tool()
 def search_qmgr_dump(search_string: str, object_type: str | None = None) -> str:
     """
