@@ -22,7 +22,7 @@ User Input → Client (Guided/AI/Basic) → MCP Protocol (stdio)
 ### Component Breakdown
 
 #### Server
-*   **`mqmcpserver.py`**: The "Brain". Handles tool registration, REST API orchestration, and CSV-backed queue dump search. Uses stdlib `logging` and a module-level CSV cache for performance.
+*   **`mqmcpserver.py`**: The "Brain". Handles tool registration (7 tools: 4 core + 3 composite), REST API orchestration, hostname allow-list filtering, user-friendly error handling, and CSV-backed queue dump search. Uses stdlib `logging` and a module-level CSV cache for performance. The CSV data is used internally only and is not exposed to clients.
 
 #### Shared MQ Knowledge (`clients/mq_tools/`)
 *   **`prompts.py`**: Single source of truth for `MQ_SYSTEM_PROMPT` — consumed by all LLM providers.
@@ -70,7 +70,7 @@ Used in the **Basic Assistant**. It is fast, predictable, and free.
 Used in the **AI Assistant** and the **Remote AI Assistant**. It supports three providers — OpenAI GPT-4, Anthropic Claude, and Google Gemini.
 *   **Pros**: Understands complex synonyms, extracts parameters intelligently.
 *   **Best for**: Unstructured requests like "Are there any issues with my production queues?"
-*   **Provider selection**: All providers share the same `MQ_SYSTEM_PROMPT` and the same four MQ tools — provider-specific schema conversion is handled transparently by `mq_tools/converters.py`.
+*   **Provider selection**: All providers share the same `MQ_SYSTEM_PROMPT` and the same seven MQ tools (4 core + 3 composite) — provider-specific schema conversion is handled transparently by `mq_tools/converters.py`.
 
 ### 3. Hybrid Strategy (Recommended)
 The **Guided Assistant** combines specific task definitions with the dynamic client to provide a reliable "one-click" experience while still supporting natural language commands.
