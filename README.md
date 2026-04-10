@@ -11,22 +11,39 @@ A powerful and user-friendly **Model Context Protocol (MCP)** server for IBM MQ,
 *   🧠 **Smart Workflows**: Automatically locates queues across any Queue Manager (including Clusters) without needing explicit targeting.
 *   🛡️ **Installation Auditing**: Retrieve detailed MQ version, build, and installation path info.
 *   🔒 **Production Protection**: Hostname-based filtering prevents accidental queries to production systems.
+*   🔐 **Basic Authentication**: Optional HTTP Basic Auth for SSE transport endpoints.
 *   🎯 **Intelligent Query Routing**: Smart queue listing validates hostnames before executing MQ commands.
 *   🔍 **Tool Transparency**: Configurable logging shows which MCP tools are called and their REST API endpoints.
+*   ⚡ **Composite Tools**: High-level workflow tools (`get_queue_depth`, `run_mqsc_for_object`, `get_channel_status`) that auto-discover queue managers — no orchestration layer needed.
 *   🤖 **Multiple Interfaces**: Choose between Pattern-based (Basic), AI-powered (OpenAI / Anthropic / Gemini), Guided (One-click), or SSE (Real-time).
 *   🌐 **Universal REST Support**: Fully integrated with the IBM MQ REST API (mqweb), supporting both Distributed and z/OS managers.
 *   🔌 **UI-Agnostic API Gateway**: A decoupled FastAPI backend that provides a single `POST /api/v1/chat` endpoint and comes with a built-in static Web Chatbot.
+*   🛡️ **User-Friendly Errors**: Connection errors are presented as clear, actionable messages instead of raw HTTP traces.
 
 ---
 
 ## 🛠️ The MQ Toolset
 
-The server exposes three primary tools to any connected MCP client:
+The server exposes **7 tools** to any connected MCP client:
 
-1.  **`dspmq`**: Lists available queue managers and their current state (Running/Ended).
-2.  **`dspmqver`**: Provides detailed IBM MQ version, build level, and installation platform details.
-3.  **`runmqsc`**: The powerhouse tool—executes any MQSC command (e.g., `DISPLAY QLOCAL`, `DISPLAY CHSTATUS`) and returns formatted results.
-4.  **`search_qmgr_dump`**: Instantly searches a local snapshot (`qmgr_dump.csv`) for any string (Queue, Channel, App ID) across all Queue Managers.
+### Core Tools (Low-Level)
+
+| Tool | Description |
+| :--- | :--- |
+| **`search_qmgr_dump`** | Search the offline manifest (`qmgr_dump.csv`) for any object (Queue, Channel, App ID) across all Queue Managers. |
+| **`dspmq`** | List available queue managers and their current state (Running/Ended). |
+| **`dspmqver`** | Display IBM MQ version, build level, and installation platform details. |
+| **`runmqsc`** | Execute any MQSC command (e.g., `DISPLAY QLOCAL`, `DISPLAY CHSTATUS`) against a specific Queue Manager. |
+
+### Composite Tools (Workflow-Aware) ⭐
+
+These tools **embed the search-first workflow** — they automatically discover which Queue Manager(s) host an object before executing commands. No orchestration layer or LLM prompt engineering required.
+
+| Tool | Description |
+| :--- | :--- |
+| **`run_mqsc_for_object`** | Search for any MQ object → run an MQSC command on **all** hosting Queue Managers → return consolidated results. |
+| **`get_queue_depth`** | Search for a queue → resolve aliases (QA* → QL*) → return current depth from all hosting Queue Managers. |
+| **`get_channel_status`** | Search for a channel → return `CHSTATUS` from all hosting Queue Managers. |
 
 ---
 
@@ -119,6 +136,11 @@ GEMINI_API_KEY=AIza...         # Google Gemini
 MQ_MCP_HOST=0.0.0.0
 MQ_MCP_PORT=5000
 MQ_MCP_TRANSPORT=stdio   # 'stdio' (default) or 'sse'
+
+# MCP Endpoint Authentication (Basic Auth — SSE transport only)
+# Leave blank to disable authentication
+MCP_AUTH_USER=mcpadmin
+MCP_AUTH_PASSWORD=mcpadmin
 ```
 
 ### 3. Launching the Assistant
@@ -181,8 +203,10 @@ Add the server to your extension settings using the same `command`, `args`, and 
 
 ## 🛡️ Security & Stability
 
+*   **Basic Authentication**: SSE transport supports optional HTTP Basic Auth. Set `MCP_AUTH_USER` and `MCP_AUTH_PASSWORD` in `.env` to enable. Unauthenticated requests receive `401 Unauthorized`. Stdio mode (local subprocess) is unaffected.
+*   **Production Protection**: Hostname-based filtering prevents accidental queries to production systems.
+*   **User-Friendly Errors**: Connection errors (503, 401, timeouts, etc.) are translated into clear, actionable messages instead of raw HTTP stack traces.
 *   **Process Isolation**: Clients launch the MCP server as a dedicated subprocess utilizing the active virtual environment.
-*   **Error Handling**: Built-in protection against Windows encoding issues (`UnicodeEncodeError`) and robust `.env` discovery.
 *   **Logging**: Server-side diagnostic messages use Python's `logging` module and are routed to `stderr` to keep `stdout` clean for the MCP JSON-RPC protocol.
 *   **Provider Modularity**: Each LLM provider lives in its own module under `clients/providers/`. Adding a new provider requires only one new file and one registry entry.
 

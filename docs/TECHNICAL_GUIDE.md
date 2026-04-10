@@ -52,6 +52,7 @@ The server (`mqmcpserver.py`) supports two distinct modes, controlled via `.env`
 2.  **SSE Mode (Server-Sent Events)**:
     -   Activated when `MQ_MCP_TRANSPORT=sse`.
     -   Binds to `MQ_MCP_HOST` (default `0.0.0.0`) and `MQ_MCP_PORT` (default `5000`).
+    -   Supports optional **HTTP Basic Authentication** via `MCP_AUTH_USER` and `MCP_AUTH_PASSWORD` in `.env`.
     -   Ideal for remote access or decoupled architectures.
 
 ---
@@ -84,7 +85,21 @@ The ecosystem implements "Smart Queue" logic to simplify user interaction.
 Traditionally, MQ admins must know *exactly* which Queue Manager hosts a queue before querying it (e.g., `DISPLAY QLOCAL(Q1)` needs a target QMGR).
 
 ### The Solution
-Our clients (Dynamic, SSE, & AI) automatically solve this using a multi-step workflow:
+The MCP server provides two approaches for solving this:
+
+#### Approach 1: Composite Tools (Recommended)
+The server exposes **workflow-aware composite tools** that embed the entire search-and-execute workflow in a single tool call:
+
+| Tool | What it does automatically |
+| :--- | :--- |
+| `run_mqsc_for_object` | Search → find all QMs → run MQSC on each → return consolidated results |
+| `get_queue_depth` | Search → resolve aliases (QA*→QL*) → get CURDEPTH from all QMs |
+| `get_channel_status` | Search → get CHSTATUS from all QMs |
+
+These tools require **no LLM prompt engineering** and **no orchestration layer** — the workflow is enforced by the tool itself.
+
+#### Approach 2: Multi-Step (Client-Driven)
+Clients (Dynamic, SSE, & AI) can also solve this using a multi-step workflow:
 1.  **Search**: When a user asks about a queue (e.g., "Check Q1"), the system first calls `search_qmgr_dump` to find it globally.
 2.  **Identify**: It parses the results to find **ALL** Queue Managers hosting that queue (supports Multi-Instance and Clusters).
 3.  **Execute**: It runs the requested command (Depth/Status) against *every* found Queue Manager using `runmqsc`.
@@ -195,8 +210,10 @@ pip install -r requirements-llm.txt
 
 | Issue | Potential Cause | Solution |
 | :--- | :--- | :--- |
-| `UnicodeEncodeError` | Emojis in terminal | Ensure the latest `dynamic_client.py` is used (emojis removed). |
-| `Connection Error` | Invalid `.env` path | The server searches current and parent directories for `.env`. |
+| `⚠️ MQ is not available on 'host'` | MQ REST API down on that host | Contact MqAceInfra Support team or try again later. |
+| `🔒 Authentication failed` | Wrong MQ credentials | Check `MQ_USER_NAME` and `MQ_PASSWORD` in `.env`. |
+| `⏱️ Connection timed out` | Host unreachable | Check network / firewall rules. |
+| `401 Unauthorized` (on MCP endpoint) | Missing/wrong MCP auth | Check `MCP_AUTH_USER` and `MCP_AUTH_PASSWORD` in `.env`. |
 | `ModuleNotFoundError` | Virtual Env inactive | Ensure `venv` is activated before running clients. |
 | `Unknown Tool` | Server/Client mismatch | All clients now use `sys.executable` to ensure environment parity. |
 
@@ -316,17 +333,48 @@ The following metrics are automatically captured for every tool call:
 
 ## 🔒 Security Configuration (Production Readiness)
 
-For production deployments, the MCP endpoint must be secured using SSL/TLS and Authentication. Since `FastMCP`'s standard run method is simplified, these features require specific implementation patterns.
+The MCP server includes built-in security features for production deployments.
 
-### 1. Enable SSL/TLS (HTTPS)
-To serve traffic securely, you must bypass the standard `mcp.run()` and use `uvicorn` directly with your certificate files.
+### 1. Basic Authentication (Implemented)
+
+The SSE transport supports HTTP Basic Authentication out of the box. When credentials are configured, every HTTP request to the MCP endpoint must include a valid `Authorization: Basic <base64>` header.
+
+**Configuration (`.env`):**
+```env
+# Set both to enable auth; leave blank to disable
+MCP_AUTH_USER=mcpadmin
+MCP_AUTH_PASSWORD=mcpadmin
+```
+
+**Behavior:**
+
+| Transport | Auth Configured | Behavior |
+| :--- | :--- | :--- |
+| SSE | ✅ Yes | Basic Auth enforced — `401 Unauthorized` without valid credentials |
+| SSE | ❌ No | No auth (warning logged at startup) |
+| stdio | N/A | Auth not applicable (local subprocess) |
+
+**Client Example:**
+```powershell
+# Without auth → 401 Unauthorized
+curl http://localhost:5000/sse
+
+# With auth → connected
+curl -u mcpadmin:mcpadmin http://localhost:5000/sse
+```
+
+### 2. Enable SSL/TLS (HTTPS)
+To serve traffic securely, you can bypass the standard `mcp.run()` and use `uvicorn` directly with your certificate files.
 
 **Implementation Pattern (`server/mqmcpserver.py`):**
 ```python
 if transport == "sse":
     import uvicorn
-    # Get the underlying Starlette app
     app = mcp.sse_app()
+    
+    # Apply auth middleware if configured
+    if MCP_AUTH_USER and MCP_AUTH_PASSWORD:
+        app = BasicAuthMiddleware(app, MCP_AUTH_USER, MCP_AUTH_PASSWORD)
     
     # Run with SSL
     uvicorn.run(
@@ -338,24 +386,18 @@ if transport == "sse":
     )
 ```
 
-### 2. API Key Authentication
-The simplest security layer is a middleware that enforces an `X-API-Key` header.
+### 3. User-Friendly Error Messages
 
-**Implementation Pattern (`server/mqmcpserver.py`):**
-```python
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response
+All connection errors from the MQ REST API are translated into clear, actionable messages:
 
-class AuthMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request, call_next):
-        api_key = os.getenv("MQ_MCP_API_KEY")
-        if api_key and request.headers.get("X-API-Key") != api_key:
-            return Response("Unauthorized", status_code=401)
-        return await call_next(request)
-
-# Add to app before running
-app.add_middleware(AuthMiddleware)
-```
+| HTTP Error | User Sees |
+| :--- | :--- |
+| 503 Service Unavailable | ⚠️ MQ is not available on 'host'. Please report this issue to MqAceInfra Support team or try after some time. |
+| 401 Unauthorized | 🔒 Authentication failed. Check MQ_USER_NAME and MQ_PASSWORD in your .env file. |
+| 403 Forbidden | 🔒 Access denied. The configured user does not have permission. |
+| Connection Refused | ⚠️ Cannot connect to MQ REST API. The host may be offline. |
+| Timeout | ⏱️ Connection timed out. The host may be slow or unreachable. |
+| SSL Error | 🔐 SSL/TLS error. There may be a certificate issue. |
 
 ---
 
