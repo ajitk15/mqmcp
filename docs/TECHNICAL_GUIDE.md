@@ -222,13 +222,37 @@ pip install -r requirements-llm.txt
  ## 🧪 Standalone Testing & Validation
  
  ### MCP Inspector (Debug Mode)
- For isolated server testing without a full client, use the MCP Inspector. It launches the server and opens a local web UI where you can manually invoke tools and inspect JSON-RPC message flow.
+ For isolated server testing without a full client, use the MCP Inspector. It launches a local web UI where you can manually invoke tools and inspect JSON-RPC message flow.
  
+ #### Stdio Mode (Inspector launches the server)
  ```powershell
  # Run from the root directory
  npx @modelcontextprotocol/inspector python server/mqmcpserver.py
  ```
+ The inspector starts the server as a subprocess and connects via stdio. No authentication is required.
+
  *Technical Note: The inspector captures `stdout` for the protocol and displays `stderr` in the terminal console, letting you see the server's `logging` output (level `DEBUG` by default in stdio mode).*
+ 
+ #### SSE Mode (Connect to a running server)
+ If your server is already running in SSE mode (`MQ_MCP_TRANSPORT=sse`):
+
+ 1. Launch the inspector:
+    ```powershell
+    npx @modelcontextprotocol/inspector
+    ```
+ 2. In the Inspector web UI:
+    - Change the **Transport Type** dropdown from `STDIO` to `SSE`
+    - Enter the **URL**: `http://localhost:5000/sse`
+    - If you have Basic Auth enabled, add a header:
+      - Key: `Authorization`
+      - Value: `Basic bXl1c2VyOm15cGFzc3dvcmQ=` (base64 of `myuser:mypassword`)
+    - Click **Connect**
+
+ To generate the base64-encoded credentials for your own username and password:
+ ```powershell
+ python -c "import base64; print(base64.b64encode(b'myuser:mypassword').decode())"
+ ```
+ Replace `myuser:mypassword` with your actual `MCP_AUTH_USER:MCP_AUTH_PASSWORD` values from `.env`.
  
  ### Process-Level Configuration
  When running as a standalone server (e.g., in Claude Desktop), the server needs to know where its dependencies and environment variables are.
