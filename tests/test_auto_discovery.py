@@ -12,7 +12,7 @@ class TestAutoDiscovery:
         Test: Queue exists on ONE queue manager
         User: "What is the depth of QL.OUT.APP3?"
         Expected workflow:
-          1. search_qmgr_dump('QL.OUT.APP3') -> finds MQQMGR1
+          1. find_mq_object('QL.OUT.APP3') -> finds MQQMGR1
           2. runmqsc(MQQMGR1, 'DISPLAY QLOCAL(QL.OUT.APP3) CURDEPTH')
           3. Return: "Current depth of QL.OUT.APP3 on MQQMGR1 is 42"
         """
@@ -28,7 +28,7 @@ class TestAutoDiscovery:
         Test: Queue exists on MULTIPLE queue managers (CRITICAL)
         User: "What is the current depth of queue QL.IN.APP1?"
         Expected workflow:
-          1. search_qmgr_dump('QL.IN.APP1') -> finds MQQMGR1 AND MQQMGR2
+          1. find_mq_object('QL.IN.APP1') -> finds MQQMGR1 AND MQQMGR2
           2. runmqsc(MQQMGR1, 'DISPLAY QLOCAL(QL.IN.APP1) CURDEPTH') -> 15
           3. runmqsc(MQQMGR2, 'DISPLAY QLOCAL(QL.IN.APP1) CURDEPTH') -> 8
           4. Return depths for BOTH: "MQQMGR1: 15, MQQMGR2: 8"
@@ -45,7 +45,7 @@ class TestAutoDiscovery:
         Test: Queue does NOT exist anywhere
         User: "What is the depth of QL.NONEXISTENT?"
         Expected workflow:
-          1. search_qmgr_dump('QL.NONEXISTENT') -> no results
+          1. find_mq_object('QL.NONEXISTENT') -> no results
           2. Return: "Queue QL.NONEXISTENT not found"
         """
         queue_name = "QL.NONEXISTENT"
@@ -98,7 +98,7 @@ class TestMultiQueueManagerScenarios:
         
         # AI SHOULD do this
         good_workflow = [
-            "search_qmgr_dump",
+            "find_mq_object",
             "runmqsc(MQQMGR1)",
             "runmqsc(MQQMGR2)"
         ]
@@ -113,7 +113,7 @@ class TestAliasQueueResolution:
         Test: Alias queue should resolve to target automatically
         User: "What is the depth of QA.IN.APP1?"
         Expected workflow:
-          1. search_qmgr_dump('QA.IN.APP1') -> finds MQQMGR1, type=QALIAS
+          1. find_mq_object('QA.IN.APP1') -> finds MQQMGR1, type=QALIAS
           2. runmqsc(MQQMGR1, 'DISPLAY QALIAS(QA.IN.APP1)') -> TARGET(QL.IN.APP1)
           3. runmqsc(MQQMGR1, 'DISPLAY QLOCAL(QL.IN.APP1) CURDEPTH') -> 85
           4. Return: "Alias QA.IN.APP1 -> QL.IN.APP1, depth: 85"

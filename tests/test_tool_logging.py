@@ -77,9 +77,9 @@ class TestRESTEndpointConstruction:
         assert "localhost" not in expected_endpoint
         assert f"https://{qmgr_name}" in expected_endpoint
     
-    def test_search_qmgr_dump_endpoint(self):
-        """Test: search_qmgr_dump shows CSV file path"""
-        tool_name = "search_qmgr_dump"
+    def test_find_mq_object_endpoint(self):
+        """Test: find_mq_object shows CSV file path"""
+        tool_name = "find_mq_object"
         expected_endpoint = "[CSV File] resources/qmgr_dump.csv"
         
         assert "CSV" in expected_endpoint

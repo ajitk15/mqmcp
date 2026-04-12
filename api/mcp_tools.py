@@ -9,14 +9,14 @@ if project_root not in sys.path:
 
 # Import the robust, fully-featured original MCP Tools
 from server.mqmcpserver import (
-    search_qmgr_dump as _search_qmgr_dump,
+    find_mq_object as _find_mq_object,
     runmqsc as _runmqsc,
     dspmq as _dspmq,
     dspmqver as _dspmqver
 )
 
 @tool
-def search_qmgr_dump(search_string: str, object_type: str | None = None) -> str:
+def find_mq_object(search_string: str, object_type: str | None = None) -> str:
     """Search QM dump for a string (Queue Name, Channel Name) to find which Queue Manager hosts an object.
     You MUST run this tool first if you do not know which Queue Manager hosts a specific queue or channel.
     
@@ -24,7 +24,7 @@ def search_qmgr_dump(search_string: str, object_type: str | None = None) -> str:
         search_string: String to search (e.g., 'QL.IN.APP1')
         object_type: Optional filter (e.g., 'QLOCAL', 'QUEUES', 'CHANNEL')
     """
-    return _search_qmgr_dump(search_string, object_type)
+    return _find_mq_object(search_string, object_type)
 
 @tool
 async def dspmq(qmgr_name: str | None = None) -> str:
@@ -48,7 +48,7 @@ async def dspmqver(qmgr_name: str | None = None) -> str:
 async def runmqsc(qmgr_name: str, mqsc_command: str) -> str:
     """Execute a raw MQSC command against a queue manager.
     You must provide BOTH the queue manager name and the MQSC command. 
-    Use search_qmgr_dump first if you don't know the queue manager name.
+    Use find_mq_object first if you don't know the queue manager name.
     
     Args:
         qmgr_name: The name of the queue manager.
@@ -57,4 +57,4 @@ async def runmqsc(qmgr_name: str, mqsc_command: str) -> str:
     return await _runmqsc(qmgr_name, mqsc_command)
 
 # Provide all tools as a list for easy binding
-MQ_TOOLS = [search_qmgr_dump, dspmq, dspmqver, runmqsc]
+MQ_TOOLS = [find_mq_object, dspmq, dspmqver, runmqsc]

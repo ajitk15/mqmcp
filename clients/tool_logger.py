@@ -57,7 +57,7 @@ def get_rest_api_url(tool_name: str, args: dict) -> str:
             # Fallback display: use QM name as host (most common in small labs)
             url_with_qmgr_host = base_url.replace('localhost', qmgr)
             return f"{url_with_qmgr_host}action/qmgr/{qmgr}/mqsc (Auto-routed)"
-    elif tool_name == "search_qmgr_dump":
+    elif tool_name == "find_mq_object":
         return "[CSV File] resources/qmgr_dump.csv"
     else:
         return "Unknown endpoint"

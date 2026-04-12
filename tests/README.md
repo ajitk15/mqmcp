@@ -93,7 +93,7 @@ pytest tests/ --cov=clients --cov=server --cov-report=html
 ```python
 # User Input: "What is the current depth of queue QL.IN.APP1?"
 # Expected Behavior:
-# 1. search_qmgr_dump('QL.IN.APP1') → finds MQQMGR1 AND MQQMGR2
+# 1. find_mq_object('QL.IN.APP1') → finds MQQMGR1 AND MQQMGR2
 # 2. runmqsc(MQQMGR1, 'DISPLAY QLOCAL(QL.IN.APP1) CURDEPTH') → 15
 # 3. runmqsc(MQQMGR2, 'DISPLAY QLOCAL(QL.IN.APP1) CURDEPTH') → 8
 # 4. Return: "MQQMGR1: depth 15, MQQMGR2: depth 8"

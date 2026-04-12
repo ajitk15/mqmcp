@@ -1,0 +1,71 @@
+---
+- name: Extract QMGRs Manifest from MQ Servers
+  hosts: mq_servers
+  gather_facts: yes
+  tasks:
+    - name: Get running Queue Managers
+      ansible.builtin.command: dspmq -o default
+      register: dspmq_out
+      changed_when: false
+      failed_when: false
+
+    - name: Parse QMGR names
+      ansible.builtin.set_fact:
+        qmgr_names: "{{ dspmq_out.stdout | default('') | regex_findall('QMNAME\\(([^)]+)\\)') }}"
+
+    - name: Dump MQ configurations
+      ansible.builtin.command: "dmpmqcfg -m {{ item }} -a -o 1line"
+      loop: "{{ qmgr_names | default([]) }}"
+      register: dmpmqcfg_raw
+      changed_when: false
+      failed_when: false
+
+    - name: Generate CSV rows in memory for this host
+      ansible.builtin.set_fact:
+        host_csv_rows: >-
+          {%- set rows = [] -%}
+          {%- set current_date = ansible_date_time.date | default('1970-01-01') -%}
+          {%- for result in dmpmqcfg_raw.results | default([]) -%}
+            {%- set qmname = result.item -%}
+            {%- for line in result.stdout_lines | default([]) -%}
+              {%- if line | regex_search('^DEFINE\\s+[A-Z]+\\s*\\(') or line | regex_search('^ALTER\\s+QMGR') or line | regex_search('^SET\\s+[A-Z]+') -%}
+                {%- set parts = line.split(' ', 2) -%}
+                {%- if line.startswith('DEFINE') -%}
+                  {%- set obj_type = parts[1].split('(')[0] -%}
+                {%- elif line.startswith('ALTER QMGR') -%}
+                  {%- set obj_type = 'QMGR' -%}
+                {%- elif line.startswith('SET') -%}
+                  {%- set obj_type = parts[1] -%}
+                {%- else -%}
+                  {%- set obj_type = 'UNKNOWN' -%}
+                {%- endif -%}
+                {%- set _ = rows.append('%s|%s|%s|%s|%s' | format(current_date, inventory_hostname, qmname, obj_type, line)) -%}
+              {%- endif -%}
+            {%- endfor -%}
+          {%- endfor -%}
+          {{ rows | join('\n') }}
+
+- name: Aggregate all parsed rows into local CSV
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Ensure target resources directory exists
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/../resources"
+        state: directory
+
+    - name: Build complete CSV string
+      ansible.builtin.set_fact:
+        all_csv_content: |
+          extractedat|hostname|qmname|objecttype|objectdef
+          {% for host in groups['mq_servers'] %}
+          {% if hostvars[host]['host_csv_rows'] is defined and hostvars[host]['host_csv_rows'] | length > 0 %}
+          {{ hostvars[host]['host_csv_rows'] }}
+          {% endif %}
+          {% endfor %}
+
+    - name: Write final qmgr_dump.csv manifest
+      ansible.builtin.copy:
+        dest: "{{ playbook_dir }}/../resources/qmgr_dump.csv"
+        content: "{{ all_csv_content | trim }}\n"
+        mode: '0664'

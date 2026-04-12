@@ -1,27 +1,11 @@
-#
-# Copyright (c) 2025 IBM Corp.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#    http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 import asyncio
 import base64
 import json
-import logging
 import os
 import re
 import sys
 from pathlib import Path
-from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 import pandas as pd
@@ -67,6 +51,48 @@ ALLOWED_HOSTNAME_PREFIXES = [p.strip() for p in ALLOWED_PREFIXES_STR.split(",")]
 # Standard CSRF token value accepted by IBM MQ REST API (any non-empty value works)
 _CSRF_TOKEN = "token"
 
+# MQSC verbs that modify configuration — these are blocked in read-only mode
+_MODIFY_VERBS = {
+    "ALTER", "DEFINE", "DELETE", "CLEAR", "MOVE", "SET",
+    "RESET", "START", "STOP", "PURGE", "REFRESH", "RESOLVE",
+    "ARCHIVE", "BACKUP",
+}
+
+# Support contact details for modification requests (loaded from .env)
+MQ_SUPPORT_TEAM = os.getenv("MQ_SUPPORT_TEAM", "")
+MQ_ADMIN_GROUP  = os.getenv("MQ_ADMIN_GROUP", "")
+
+# ---------------------------------------------------------------------------
+# HTTP Client (Shared)
+# ---------------------------------------------------------------------------
+_HTTP_CLIENT: httpx.AsyncClient | None = None
+
+
+def get_http_client() -> httpx.AsyncClient:
+    """Return a shared HTTP client to reuse TLS handshakes across tool calls."""
+    global _HTTP_CLIENT
+    if _HTTP_CLIENT is None or _HTTP_CLIENT.is_closed:
+        auth = httpx.BasicAuth(username=USER_NAME, password=PASSWORD)
+        _HTTP_CLIENT = httpx.AsyncClient(verify=False, auth=auth, timeout=30.0)
+    return _HTTP_CLIENT
+
+
+def _is_modification_command(mqsc_command: str) -> bool:
+    """Return True if the MQSC command would modify queue-manager configuration."""
+    first_word = mqsc_command.strip().split()[0].upper() if mqsc_command.strip() else ""
+    return first_word in _MODIFY_VERBS
+
+
+_MODIFY_BLOCKED_MSG = (
+    "🚫 **Modification requests are not permitted through this tool.**\n\n"
+    "This MCP server is configured for **read-only diagnostics only** and cannot "
+    "execute commands that alter, create, or delete MQ objects.\n\n"
+    "To make configuration changes, please:\n"
+    f"  1. 📧 Reach out to the **{MQ_SUPPORT_TEAM}** team, or\n"
+    f"  2. 🎫 Raise a ticket from **ServiceNow** → go/gen → assign to group **{MQ_ADMIN_GROUP}**\n\n"
+    "They will be happy to assist you with the requested change."
+)
+
 # MCP endpoint authentication (optional — only applies to SSE transport)
 MCP_AUTH_USER = os.getenv("MCP_AUTH_USER", "")
 MCP_AUTH_PASSWORD = os.getenv("MCP_AUTH_PASSWORD", "")
@@ -74,7 +100,7 @@ MCP_AUTH_PASSWORD = os.getenv("MCP_AUTH_PASSWORD", "")
 # ---------------------------------------------------------------------------
 # CSV helpers — cached at module level so disk is only read once per startup
 # ---------------------------------------------------------------------------
-CSV_PATH = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) / "resources" / "qmgr_dump.csv"
+CSV_PATH = Path(project_root) / "resources" / "qmgr_dump.csv"
 
 _CSV_CACHE: pd.DataFrame | None = None
 
@@ -134,10 +160,17 @@ def is_hostname_allowed(hostname: str) -> tuple[bool, str]:
 
     allowed_list = ", ".join(ALLOWED_HOSTNAME_PREFIXES)
     message = (
-        f"🚫 Access to this systems is restricted for safety. "
-        f"This query targets hostname '{hostname}' which is not in the allowed list.\n\n"
+        f"🚫 Access to this system is restricted for safety. "
+        f"Hostname '{hostname}' is not in the allowed list ({allowed_list}).\n\n"
     )
     return False, message
+
+
+def _build_url(target_hostname: str, path: str) -> str:
+    """Replace the hostname in URL_BASE with target_hostname and append path."""
+    parsed = urlparse(URL_BASE)
+    new_netloc = f"{target_hostname}:{parsed.port}" if parsed.port else target_hostname
+    return parsed._replace(netloc=new_netloc).geturl() + path
 
 
 def _friendly_error(err: Exception, hostname: str = "") -> str:
@@ -256,7 +289,7 @@ mcp = FastMCP("mqmcpserver", host=mcp_host, port=mcp_port)
 
 
 @mcp.tool()
-def search_qmgr_dump(search_string: str, object_type: str | None = None) -> str:
+def find_mq_object(search_string: str, object_type: str | None = None) -> str:
     """
     Search QM dump for a string to find which QM hosts an object.
     Returns the queue manager name(s), hostname(s), and object type.
@@ -270,56 +303,31 @@ def search_qmgr_dump(search_string: str, object_type: str | None = None) -> str:
         search_string: String to search (e.g., queue name)
         object_type: Optional filter (e.g., 'QLOCAL', 'QUEUES', 'CHANNEL')
     """
-    df = load_csv()
-    if df.empty:
-        return "No records found. CSV file may be empty."
+    results = _search_objects_structured(search_string, object_type)
 
-    # 1. Total search across all allowed (and disallowed) columns first to see if it even exists
-    total_matches = df[df.astype(str).apply(
-        lambda row: row.str.contains(re.escape(search_string), case=False, na=False).any(), axis=1
-    )]
-    
-    if total_matches.empty:
+    if not results:
+        # Check if the object exists at all (without type filter) to give a better message
+        if object_type and _search_objects_structured(search_string):
+            return f"❌ '{search_string}' exists but is not of type '{object_type}'."
         return f"❌ '{search_string}' not found in the manifest."
 
-    # 2. Apply object_type (or inferred type) filter to ALL matches first
-    inf_type = object_type
-    if not inf_type:
-        s_upper = search_string.upper()
-        if s_upper.startswith("QL."): inf_type = "QLOCAL"
-        elif s_upper.startswith("QA."): inf_type = "QALIAS"
-        elif s_upper.startswith("QR."): inf_type = "QREMOTE"
+    accessible = [r for r in results if not r["restricted"]]
+    restricted = [r for r in results if r["restricted"]]
 
-    type_filtered_matches = total_matches
-    if inf_type:
-        inf_type_upper = inf_type.upper()
-        if inf_type_upper == "QUEUES":
-            queue_types = ["QLOCAL", "QREMOTE", "QMODEL", "QALIAS"]
-            type_filtered_matches = type_filtered_matches[type_filtered_matches["object_type"].str.upper().isin(queue_types)]
-        else:
-            type_filtered_matches = type_filtered_matches[type_filtered_matches["object_type"].str.upper() == inf_type_upper]
-
-    if type_filtered_matches.empty:
-        found_types = ", ".join(total_matches["object_type"].unique())
-        return f"❌ '{search_string}' exists but is not of type '{inf_type}'. (Found types: {found_types})"
-
-    # 3. Check hostname allowance on the type-filtered matches
-    is_allowed_series = type_filtered_matches["hostname"].apply(lambda h: is_hostname_allowed(str(h))[0])
-    allowed_matches = type_filtered_matches[is_allowed_series]
-    restricted_matches = type_filtered_matches[~is_allowed_series]
-    
-    if allowed_matches.empty:
+    if not accessible:
         return f"🚫 '{search_string}' was found, but only on restricted/production systems. I do not have access to these."
 
-    # 4. Deduplicate and format output for allowed matches
-    display_cols = allowed_matches[["hostname", "qmgr", "object_type"]].drop_duplicates()
-    output_lines = [f"QM:{r['qmgr']} Host:{r['hostname']} Type:{r['object_type']}" for _, r in display_cols.iterrows()]
-    
-    # 5. Include restricted matches in the same list but with a clear tag
-    if not restricted_matches.empty:
-        res_rest_display = restricted_matches[["hostname", "qmgr", "object_type"]].drop_duplicates()
-        for _, r in res_rest_display.iterrows():
-            output_lines.append(f"QM:{r['qmgr']} [RESTRICTED: {r['hostname']}] Type:{r['object_type']}")
+    # Format output for allowed matches
+    output_lines = [
+        f"QM:{r['qmgr']} Host:{r['hostname']} Type:{r['object_type']}"
+        for r in accessible
+    ]
+
+    # Include restricted matches with a clear tag
+    for r in restricted:
+        output_lines.append(
+            f"QM:{r['qmgr']} [RESTRICTED: {r['hostname']}] Type:{r['object_type']}"
+        )
 
     return "\n".join(output_lines)
 
@@ -336,6 +344,7 @@ async def dspmq(qmgr_name: str | None = None) -> str:
         "ibm-mq-rest-csrf-token": _CSRF_TOKEN,
     }
     
+    target_hostname = ""
     url = URL_BASE + "qmgr/"
     if qmgr_name:
         df = load_csv()
@@ -345,23 +354,17 @@ async def dspmq(qmgr_name: str | None = None) -> str:
             allowed, message = is_hostname_allowed(target_hostname)
             if not allowed:
                 return message
-                
-            from urllib.parse import urlparse
-            parsed = urlparse(URL_BASE)
-            new_netloc = f"{target_hostname}:{parsed.port}" if parsed.port else target_hostname
-            url_with_host = parsed._replace(netloc=new_netloc).geturl()
-            url = url_with_host + "qmgr/"
+            url = _build_url(target_hostname, "qmgr/")
         else:
             return f"❌ Queue Manager '{qmgr_name}' not found in the manifest."
 
-    auth = httpx.BasicAuth(username=USER_NAME, password=PASSWORD)
-    async with httpx.AsyncClient(verify=False, auth=auth) as client:
-        try:
-            response = await client.get(url, headers=headers, timeout=30.0)
-            response.raise_for_status()
-            return prettify_dspmq(response.content)
-        except Exception as err:
-            return _friendly_error(err, hostname=target_hostname if 'target_hostname' in dir() else '')
+    client = get_http_client()
+    try:
+        response = await client.get(url, headers=headers, timeout=30.0)
+        response.raise_for_status()
+        return prettify_dspmq(response.content)
+    except Exception as err:
+        return _friendly_error(err, hostname=target_hostname)
 
 
 def prettify_dspmq(payload: bytes) -> str:
@@ -385,6 +388,7 @@ async def dspmqver(qmgr_name: str | None = None) -> str:
     }
     
     # Establish target URL
+    target_hostname = ""
     url = URL_BASE + "installation"
     if qmgr_name:
         df = load_csv()
@@ -394,23 +398,17 @@ async def dspmqver(qmgr_name: str | None = None) -> str:
             allowed, message = is_hostname_allowed(target_hostname)
             if not allowed:
                 return message
-                
-            from urllib.parse import urlparse
-            parsed = urlparse(URL_BASE)
-            new_netloc = f"{target_hostname}:{parsed.port}" if parsed.port else target_hostname
-            url_with_host = parsed._replace(netloc=new_netloc).geturl()
-            url = url_with_host + "installation"
+            url = _build_url(target_hostname, "installation")
         else:
             return f"❌ Queue Manager '{qmgr_name}' not found in the manifest."
 
-    auth = httpx.BasicAuth(username=USER_NAME, password=PASSWORD)
-    async with httpx.AsyncClient(verify=False, auth=auth) as client:
-        try:
-            response = await client.get(url, headers=headers, timeout=30.0)
-            response.raise_for_status()
-            return prettify_dspmqver(response.content)
-        except Exception as err:
-            return _friendly_error(err, hostname=target_hostname if 'target_hostname' in dir() else '')
+    client = get_http_client()
+    try:
+        response = await client.get(url, headers=headers, timeout=30.0)
+        response.raise_for_status()
+        return prettify_dspmqver(response.content)
+    except Exception as err:
+        return _friendly_error(err, hostname=target_hostname)
 
 
 def prettify_dspmqver(payload: bytes) -> str:
@@ -428,16 +426,26 @@ def prettify_dspmqver(payload: bytes) -> str:
 
 @mcp.tool()
 async def runmqsc(qmgr_name: str, mqsc_command: str, hostname: str | None = None) -> str:
-    """Run an MQSC command against a specific queue manager.
+    """Run a read-only MQSC command against a specific queue manager.
     You MUST know the queue manager name before calling this tool.
     If you only know the object name (queue/channel), use run_mqsc_for_object instead.
     The hostname is auto-resolved from the manifest if not provided.
 
+    NOTE: Only DISPLAY commands are allowed. Modification commands
+    (ALTER, DEFINE, DELETE, etc.) are blocked — users will be directed
+    to the InfraSupport / MQACE_ADMIN team.
+
     Args:
         qmgr_name:    The queue manager name (NOT a queue or channel name)
         mqsc_command: An MQSC command to run on the queue manager
-        hostname:     Optional: Host from search_qmgr_dump (auto-resolved if omitted)
+        hostname:     Optional: Host from find_mq_object (auto-resolved if omitted)
     """
+    if _is_modification_command(mqsc_command):
+        logger.warning(
+            "Blocked modification command: %s (qmgr=%s)",
+            mqsc_command, qmgr_name,
+        )
+        return _MODIFY_BLOCKED_MSG
     headers = {
         "Content-Type": "application/json",
         "ibm-mq-rest-csrf-token": _CSRF_TOKEN,
@@ -468,28 +476,19 @@ async def runmqsc(qmgr_name: str, mqsc_command: str, hostname: str | None = None
     # Use json.dumps to safely serialise the command
     data = json.dumps({"type": "runCommand", "parameters": {"command": mqsc_command}})
 
-    # Replace the hostname in URL_BASE with the actual mapped hostname from CSV
-    from urllib.parse import urlparse
-    parsed = urlparse(URL_BASE)
-    # Reconstruct netloc preserving the original port if it exists
-    new_netloc = f"{target_hostname}:{parsed.port}" if parsed.port else target_hostname
-    url_with_host = parsed._replace(netloc=new_netloc).geturl()
-    
-    url = url_with_host + "action/qmgr/" + qmgr_name + "/mqsc"
+    url = _build_url(target_hostname, "action/qmgr/" + qmgr_name + "/mqsc")
 
-    auth = httpx.BasicAuth(username=USER_NAME, password=PASSWORD)
-    async with httpx.AsyncClient(verify=False, auth=auth) as client:
-        try:
-            response = await client.post(url, data=data, headers=headers, timeout=30.0)
-            response.raise_for_status()
-            return prettify_runmqsc(response.content)
-        except Exception as err:
-            return _friendly_error(err, hostname=target_hostname)
+    client = get_http_client()
+    try:
+        response = await client.post(url, data=data, headers=headers, timeout=30.0)
+        response.raise_for_status()
+        return prettify_runmqsc(response.content)
+    except Exception as err:
+        return _friendly_error(err, hostname=target_hostname)
 
 
 def prettify_runmqsc(payload: bytes) -> str:
     """Format MQSC command response for both z/OS and distributed queue managers."""
-    import re
     json_output = json.loads(payload.decode("utf-8"))
     lines = []
     
@@ -554,15 +553,17 @@ def _search_objects_structured(
     if df.empty:
         return []
 
-    # Full-text search across all columns
-    matches = df[
-        df.astype(str).apply(
-            lambda row: row.str.contains(
-                re.escape(search_string), case=False, na=False
-            ).any(),
-            axis=1,
+    # Restrict search to relevant columns and use vectorized str.contains
+    # This is significantly faster than using .apply() across all columns
+    search_cols = [c for c in ["qmgr", "hostname", "mqsc_command", "object_type"] if c in df.columns]
+    
+    mask = pd.Series(False, index=df.index)
+    for col in search_cols:
+        mask |= df[col].astype(str).str.contains(
+            re.escape(search_string), case=False, na=False
         )
-    ]
+        
+    matches = df[mask]
 
     if matches.empty:
         return []
@@ -628,25 +629,17 @@ async def _run_mqsc_raw(
         {"type": "runCommand", "parameters": {"command": mqsc_command}}
     )
 
-    from urllib.parse import urlparse
+    url = _build_url(target_hostname, "action/qmgr/" + qmgr_name + "/mqsc")
 
-    parsed = urlparse(URL_BASE)
-    new_netloc = (
-        f"{target_hostname}:{parsed.port}" if parsed.port else target_hostname
-    )
-    url_with_host = parsed._replace(netloc=new_netloc).geturl()
-    url = url_with_host + "action/qmgr/" + qmgr_name + "/mqsc"
-
-    auth = httpx.BasicAuth(username=USER_NAME, password=PASSWORD)
-    async with httpx.AsyncClient(verify=False, auth=auth) as client:
-        try:
-            response = await client.post(
-                url, data=data, headers=headers, timeout=30.0
-            )
-            response.raise_for_status()
-            return prettify_runmqsc(response.content)
-        except Exception as err:
-            return _friendly_error(err, hostname=target_hostname)
+    client = get_http_client()
+    try:
+        response = await client.post(
+            url, data=data, headers=headers, timeout=30.0
+        )
+        response.raise_for_status()
+        return prettify_runmqsc(response.content)
+    except Exception as err:
+        return _friendly_error(err, hostname=target_hostname)
 
 
 # ---------------------------------------------------------------------------
@@ -658,11 +651,15 @@ async def _run_mqsc_raw(
 async def run_mqsc_for_object(
     object_name: str, mqsc_command: str, object_type: str | None = None
 ) -> str:
-    """Search for an MQ object and run an MQSC command on ALL queue managers that host it.
+    """Search for an MQ object and run a read-only MQSC command on ALL queue managers that host it.
 
     This tool automatically discovers which queue managers host the object by
     searching the manifest first, then executes the MQSC command on each
     accessible queue manager and returns the consolidated results.
+
+    NOTE: Only DISPLAY commands are allowed. Modification commands
+    (ALTER, DEFINE, DELETE, etc.) are blocked — users will be directed
+    to the InfraSupport / MQACE_ADMIN team.
 
     Args:
         object_name:  Name of the MQ object (queue, channel, etc.)
@@ -670,6 +667,13 @@ async def run_mqsc_for_object(
                       (e.g., 'DISPLAY QLOCAL(QL.IN.APP1) CURDEPTH')
         object_type:  Optional type filter (e.g., 'QLOCAL', 'CHANNEL', 'QUEUES')
     """
+    if _is_modification_command(mqsc_command):
+        logger.warning(
+            "Blocked modification command: %s (object=%s)",
+            mqsc_command, object_name,
+        )
+        return _MODIFY_BLOCKED_MSG
+
     logger.info(
         "run_mqsc_for_object called",
         extra={"context": {"object": object_name, "command": mqsc_command}},

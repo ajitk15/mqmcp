@@ -43,7 +43,7 @@ class TestQueueQueries:
         """Test: User asks 'what is the depth of QL.OUT.APP3?'"""
         user_input = "what is the depth of QL.OUT.APP3?"
         # Expected: 
-        # 1. search_qmgr_dump('QL.OUT.APP3') finds MQQMGR1
+        # 1. find_mq_object('QL.OUT.APP3') finds MQQMGR1
         # 2. runmqsc(MQQMGR1, 'DISPLAY QLOCAL(QL.OUT.APP3) CURDEPTH')
         assert "depth" in user_input.lower()
         assert "QL.OUT.APP3" in user_input
@@ -52,7 +52,7 @@ class TestQueueQueries:
         """Test: User asks 'what is the current depth of queue QL.IN.APP1?'"""
         user_input = "what is the current depth of queue QL.IN.APP1?"
         # Expected (CRITICAL):
-        # 1. search_qmgr_dump('QL.IN.APP1') finds MQQMGR1 AND MQQMGR2
+        # 1. find_mq_object('QL.IN.APP1') finds MQQMGR1 AND MQQMGR2
         # 2. runmqsc(MQQMGR1, 'DISPLAY QLOCAL(QL.IN.APP1) CURDEPTH')
         # 3. runmqsc(MQQMGR2, 'DISPLAY QLOCAL(QL.IN.APP1) CURDEPTH')
         # 4. Return depths for BOTH queue managers
@@ -63,7 +63,7 @@ class TestQueueQueries:
         """Test: User asks 'what is the depth of QA.IN.APP1?'"""
         user_input = "what is the depth of QA.IN.APP1?"
         # Expected:
-        # 1. search_qmgr_dump('QA.IN.APP1') finds MQQMGR1, type=QALIAS
+        # 1. find_mq_object('QA.IN.APP1') finds MQQMGR1, type=QALIAS
         # 2. runmqsc(MQQMGR1, 'DISPLAY QALIAS(QA.IN.APP1)') -> TARGET(QL.IN.APP1)
         # 3. runmqsc(MQQMGR1, 'DISPLAY QLOCAL(QL.IN.APP1) CURDEPTH')
         assert "depth" in user_input.lower()
@@ -100,7 +100,7 @@ class TestSearchQueries:
     def test_find_queue(self):
         """Test: User asks 'where is QL.IN.APP1?'"""
         user_input = "where is QL.IN.APP1?"
-        # Expected: search_qmgr_dump('QL.IN.APP1')
+        # Expected: find_mq_object('QL.IN.APP1')
         # Should return all queue managers hosting this queue
         assert "where" in user_input.lower()
         assert "QL.IN.APP1" in user_input
@@ -108,14 +108,14 @@ class TestSearchQueries:
     def test_find_channel(self):
         """Test: User asks 'find channel CH.SVRCONN'"""
         user_input = "find channel CH.SVRCONN"
-        # Expected: search_qmgr_dump('CH.SVRCONN')
+        # Expected: find_mq_object('CH.SVRCONN')
         assert "find" in user_input.lower()
         assert "CH.SVRCONN" in user_input
     
     def test_search_generic(self):
         """Test: User asks 'search for APP1'"""
         user_input = "search for APP1"
-        # Expected: search_qmgr_dump('APP1')
+        # Expected: find_mq_object('APP1')
         # Should return all objects containing APP1
         assert "search" in user_input.lower()
         assert "APP1" in user_input

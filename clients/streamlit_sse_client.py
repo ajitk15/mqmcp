@@ -77,7 +77,7 @@ OPERATIONS = {
     },
     "--- Discovery ---": {"header": True},
     "Find a Queue/Channel": {
-        "tool": "search_qmgr_dump",
+        "tool": "find_mq_object",
         "args": {"search_string": "Search Query (e.g. queue name)"},
         "description": "Search across all Queue Managers to find where a Queue or Channel exists."
     }
@@ -119,7 +119,7 @@ async def check_connection(server_url):
 
 
 def extract_qmgrs_from_search(search_output: str) -> list:
-    """Parse search_qmgr_dump output to find queue manager names"""
+    """Parse find_mq_object output to find queue manager names"""
     import re
     qmgrs = set()
     for line in search_output.split('\n'):
@@ -314,9 +314,9 @@ if choice and choice != "Select an operation...":
                     with st.spinner(f"🔍 Searching for {queue_name}..."):
                         # Step 1: Search
                         search_args = {"search_string": queue_name}
-                        search_res = asyncio.run(call_mcp_tool(st.session_state.server_url, "search_qmgr_dump", search_args))
+                        search_res = asyncio.run(call_mcp_tool(st.session_state.server_url, "find_mq_object", search_args))
                         if should_show_logging():
-                            render_tool_call("search_qmgr_dump", search_args, search_res)
+                            render_tool_call("find_mq_object", search_args, search_res)
 
                         # Step 2: Parse QMGRs
                         qmgrs = extract_qmgrs_from_search(search_res)

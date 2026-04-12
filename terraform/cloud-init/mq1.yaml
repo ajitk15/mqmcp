@@ -1,0 +1,15 @@
+#cloud-config
+package_update: true
+packages:
+  - wget
+  - tar
+  - libaio
+runcmd:
+  - cd /tmp && wget https://public.dhe.ibm.com/ibmdl/export/pub/software/websphere/messaging/mqadv_dev930_linux_x86-64.tar.gz
+  - cd /tmp && tar -xzf mqadv_dev930_linux_x86-64.tar.gz
+  - cd /tmp/MQServer && ./mqlicense.sh -accept && rpm -ivh MQSeries*.rpm
+  - /opt/mqm/bin/crtmqm QMGR1
+  - /opt/mqm/bin/strmqm QMGR1
+  - su - mqm -c "echo 'DEFINE LISTENER(LISTENER1) TRPTYPE(TCP) PORT(1414) CONTROL(QMGR)' | runmqsc QMGR1"
+  - su - mqm -c "echo 'START LISTENER(LISTENER1)' | runmqsc QMGR1"
+  - su - mqm -c "echo 'DEFINE CHANNEL(CHL1) CHLTYPE(SVRCONN) TRPTYPE(TCP)' | runmqsc QMGR1"

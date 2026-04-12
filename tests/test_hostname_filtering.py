@@ -52,7 +52,7 @@ class TestHostnameFilteringWithCSV:
     """Test hostname filtering when reading from CSV"""
     
     def test_search_filters_production(self):
-        """Test: search_qmgr_dump should filter out production hostnames"""
+        """Test: find_mq_object should filter out production hostnames"""
         # Scenario: CSV has entries for both MQQMGR1 (lod) and MQQMGR2 (lop)
         # User searches for QL.IN.APP1 which exists on both
         # Expected: Only MQQMGR1 (lod) should be returned, MQQMGR2 (lop) filtered out

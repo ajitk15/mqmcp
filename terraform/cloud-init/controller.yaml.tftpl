@@ -1,0 +1,37 @@
+#cloud-config
+package_update: true
+packages:
+  - ansible
+  - openssh-clients
+write_files:
+  - path: /home/azureuser/.ssh/id_rsa
+    permissions: '0600'
+    owner: azureuser:azureuser
+    content: |
+      ${indent(6, private_key)}
+  - path: /usr/local/bin/bootstrap_inventory.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      mkdir -p /etc/ansible
+      # System-wide inventory
+      cat <<EOF >/etc/ansible/hosts
+      [mqservers]
+      server2-mq1 ansible_host=10.0.1.5
+      EOF
+      # Local inventory for the user
+      cat <<EOF >/home/azureuser/hosts
+      [mqservers]
+      server2-mq1 ansible_host=10.0.1.5
+      EOF
+      # Local ansible.cfg to automate inventory and disable host key prompts
+      cat <<EOF >/home/azureuser/ansible.cfg
+      [defaults]
+      inventory = ./hosts
+      host_key_checking = False
+      EOF
+      chown azureuser:azureuser /home/azureuser/hosts /home/azureuser/ansible.cfg
+runcmd:
+  - mkdir -p /home/azureuser/.ansible
+  - chown -R azureuser:azureuser /home/azureuser
+  - /usr/local/bin/bootstrap_inventory.sh

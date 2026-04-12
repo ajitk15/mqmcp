@@ -15,7 +15,7 @@ QUEUE PREFIX RULES:
 - Others = System/Application queues
 
 CORE WORKFLOW (MANDATORY – NO SHORTCUTS):
-1. ALWAYS call search_qmgr_dump(<QUEUE_NAME>) first for ANY queue question.
+1. ALWAYS call find_mq_object(<QUEUE_NAME>) first for ANY queue question.
 2. Extract ALL queue manager names AND 'Host' names from results immediately.
 3. If queue exists on MULTIPLE queue managers, you MUST query ALL of them.
 4. Pass the discovered 'Host' to the 'hostname' parameter when calling runmqsc if available.
@@ -27,7 +27,7 @@ CORE WORKFLOW (MANDATORY – NO SHORTCUTS):
 
 ALIAS (QA*) HANDLING – CRITICAL:
 If user asks depth of QA*:
-1. search_qmgr_dump to identify QM(s)
+1. find_mq_object to identify QM(s)
 2. runmqsc DISPLAY QALIAS(<QA>) to get TARGET
 3. If TARGET starts with QL*, run:
    DISPLAY QLOCAL(<TARGET>) CURDEPTH

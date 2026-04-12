@@ -100,7 +100,7 @@ These tools require **no LLM prompt engineering** and **no orchestration layer**
 
 #### Approach 2: Multi-Step (Client-Driven)
 Clients (Dynamic, SSE, & AI) can also solve this using a multi-step workflow:
-1.  **Search**: When a user asks about a queue (e.g., "Check Q1"), the system first calls `search_qmgr_dump` to find it globally.
+1.  **Search**: When a user asks about a queue (e.g., "Check Q1"), the system first calls `find_mq_object` to find it globally.
 2.  **Identify**: It parses the results to find **ALL** Queue Managers hosting that queue (supports Multi-Instance and Clusters).
 3.  **Execute**: It runs the requested command (Depth/Status) against *every* found Queue Manager using `runmqsc`.
 4.  **Cluster Aware**: The AI client specifically checks for `CLUSTER` attributes and lists the hosting Queue Managers for you.
@@ -118,7 +118,7 @@ MQ_ALLOWED_HOSTNAME_PREFIXES=lod,loq,lot
 ```
 
 ### How It Works
-1. **Server-Side Filtering**: The `search_qmgr_dump` tool filters results by hostname prefix. For allowed matches, it proceeds normally. For restricted matches, it appends them to the result list with a clear `[RESTRICTED: hostname]` tag.
+1. **Server-Side Filtering**: The `find_mq_object` tool filters results by hostname prefix. For allowed matches, it proceeds normally. For restricted matches, it appends them to the result list with a clear `[RESTRICTED: hostname]` tag.
 2. **Pre-Execution Validation**: The `runmqsc` tool validates hostname before executing commands.
 3. **Client-Side Validation**: The dynamic client performs hostname checks before calling MCP tools.
 4. **AI Politeness**: The AI Assistant is explicitly instructed to recognize `[RESTRICTED]` tags and respond politely: "I found this object on [QM_NAME], but I do NOT have access to production systems for safety."

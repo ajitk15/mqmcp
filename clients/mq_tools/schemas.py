@@ -51,13 +51,13 @@ _TOOLS_CORE = [
             },
             "hostname": {
                 "type": "string",
-                "description": "Host from search_qmgr_dump",
+                "description": "Host from find_mq_object",
             },
         },
         "required": ["qmgr_name", "mqsc_command"],
     },
     {
-        "name": "search_qmgr_dump",
+        "name": "find_mq_object",
         "description": "Search QM dump for object host.",
         "parameters": {
             "search_string": {

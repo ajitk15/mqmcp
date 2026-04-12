@@ -30,7 +30,7 @@ The server exposes **7 tools** to any connected MCP client:
 
 | Tool | Description |
 | :--- | :--- |
-| **`search_qmgr_dump`** | Search the offline manifest (`qmgr_dump.csv`) for any object (Queue, Channel, App ID) across all Queue Managers. |
+| **`find_mq_object`** | Search the offline manifest (`qmgr_dump.csv`) for any object (Queue, Channel, App ID) across all Queue Managers. |
 | **`dspmq`** | List available queue managers and their current state (Running/Ended). |
 | **`dspmqver`** | Display IBM MQ version, build level, and installation platform details. |
 | **`runmqsc`** | Execute any MQSC command (e.g., `DISPLAY QLOCAL`, `DISPLAY CHSTATUS`) against a specific Queue Manager. |

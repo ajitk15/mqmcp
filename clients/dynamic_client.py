@@ -305,7 +305,7 @@ class DynamicMQClient:
             # Replace 'localhost' with queue manager name in the URL
             url_with_qmgr_host = base_url.replace('localhost', qmgr)
             return f"{url_with_qmgr_host}action/qmgr/{qmgr}/mqsc"
-        elif tool_name == "search_qmgr_dump":
+        elif tool_name == "find_mq_object":
             return "[CSV File] resources/qmgr_dump.csv (No REST API)"
         else:
             return "Unknown endpoint"
@@ -363,8 +363,8 @@ class DynamicMQClient:
             print(f"   QMGR not specified. Searching for {queue_name}...")
             try:
                 # Search for the queue
-                self._log_tool_call("search_qmgr_dump", {"search_string": queue_name})
-                search_res = await self.session.call_tool("search_qmgr_dump", {
+                self._log_tool_call("find_mq_object", {"search_string": queue_name})
+                search_res = await self.session.call_tool("find_mq_object", {
                     "search_string": queue_name
                 })
                 search_text = search_res.content[0].text
@@ -551,13 +551,13 @@ class DynamicMQClient:
         print(f"    Query: {query}")
         
         try:
-            with MetricsTracker(logger, "search_qmgr_dump", {"query": query}):
+            with MetricsTracker(logger, "find_mq_object", {"query": query}):
                 # Try generic search first
-                self._log_tool_call("search_qmgr_dump", {"search_string": query})
-                result = await self.session.call_tool("search_qmgr_dump", {
+                self._log_tool_call("find_mq_object", {"search_string": query})
+                result = await self.session.call_tool("find_mq_object", {
                     "search_string": query
                 })
-            return f"**Tool:** `search_qmgr_dump`\n**Query:** `{query}`\n\n**Result:**\n{result.content[0].text}"
+            return f"**Tool:** `find_mq_object`\n**Query:** `{query}`\n\n**Result:**\n{result.content[0].text}"
         except Exception as e:
             return f"Error: {e}"
     
