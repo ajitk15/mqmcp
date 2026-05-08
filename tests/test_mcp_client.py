@@ -29,7 +29,7 @@ MCP_AUTH_USER = os.getenv("MCP_AUTH_USER", "")
 MCP_AUTH_PASSWORD = os.getenv("MCP_AUTH_PASSWORD", "")
 MCP_PORT = os.getenv("MQ_MCP_PORT", "5000")
 
-SERVER_URL = os.getenv("MCP_SERVER_URL", "http://server1:8001/sse")
+SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:5000/sse")
 
 
 def _auth_headers() -> dict[str, str]:

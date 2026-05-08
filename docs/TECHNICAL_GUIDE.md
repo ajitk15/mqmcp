@@ -253,7 +253,89 @@ pip install -r requirements-llm.txt
  python -c "import base64; print(base64.b64encode(b'myuser:mypassword').decode())"
  ```
  Replace `myuser:mypassword` with your actual `MCP_AUTH_USER:MCP_AUTH_PASSWORD` values from `.env`.
- 
+
+ ### Direct `curl` Testing (MQ REST API Backend)
+
+ You can bypass the MCP server entirely and test the IBM MQ REST API directly using `curl`.
+ This is useful for verifying backend connectivity and troubleshooting authentication issues.
+
+ > [!NOTE]
+ > These commands use the credentials from `.env` (`MQ_USER_NAME` / `MQ_PASSWORD`), **not** the MCP
+ > auth credentials. The `-k` flag disables SSL certificate verification (required for self-signed certs).
+
+ #### List Queue Managers (`dspmq`)
+ ```cmd
+ curl -k -u "mqreader:mqreader" -H "ibm-mq-rest-csrf-token: token" -H "Content-Type: application/json" https://localhost:9443/ibmmq/rest/v3/admin/qmgr/
+ ```
+
+ #### MQ Version (`dspmqver`)
+ ```cmd
+ curl -k -u "mqreader:mqreader" -H "ibm-mq-rest-csrf-token: token" -H "Content-Type: application/json" https://localhost:9443/ibmmq/rest/v3/admin/installation
+ ```
+
+ #### Run MQSC Command (`runmqsc`)
+ Replace `QMGR_NAME` with your actual queue manager name:
+ ```cmd
+ curl -k -u "mqreader:mqreader" -X POST "https://localhost:9443/ibmmq/rest/v3/admin/action/qmgr/QMGR_NAME/mqsc" -H "ibm-mq-rest-csrf-token: token" -H "Content-Type: application/json" -d "{\"type\":\"runCommand\",\"parameters\":{\"command\":\"DISPLAY QLOCAL(*) CURDEPTH\"}}"
+ ```
+
+ #### Display a Specific Queue
+ ```cmd
+ curl -k -u "mqreader:mqreader" -X POST "https://localhost:9443/ibmmq/rest/v3/admin/action/qmgr/QMGR_NAME/mqsc" -H "ibm-mq-rest-csrf-token: token" -H "Content-Type: application/json" -d "{\"type\":\"runCommand\",\"parameters\":{\"command\":\"DISPLAY QLOCAL(QL.IN.APP1) CURDEPTH\"}}"
+ ```
+
+ #### Display Channel Status
+ ```cmd
+ curl -k -u "mqreader:mqreader" -X POST "https://localhost:9443/ibmmq/rest/v3/admin/action/qmgr/QMGR_NAME/mqsc" -H "ibm-mq-rest-csrf-token: token" -H "Content-Type: application/json" -d "{\"type\":\"runCommand\",\"parameters\":{\"command\":\"DISPLAY CHSTATUS(*) ALL\"}}"
+ ```
+
+ #### Remote MQ Host
+ Replace `localhost:9443` with the actual remote hostname:
+ ```cmd
+ curl -k -u "mqreader:mqreader" -H "ibm-mq-rest-csrf-token: token" https://server1:9443/ibmmq/rest/v3/admin/qmgr/
+ ```
+
+ #### Required Headers Reference
+
+ | Header | Value | Purpose |
+ | :--- | :--- | :--- |
+ | `-k` | *(flag)* | Skip SSL cert verification (self-signed) |
+ | `-u` | `mqreader:mqreader` | HTTP Basic Auth for MQ REST API |
+ | `ibm-mq-rest-csrf-token` | `token` | CSRF protection (any non-empty value) |
+ | `Content-Type` | `application/json` | Required for POST requests |
+
+ ### Python MCP Test Client
+
+ A lightweight Python client (`tests/test_mcp_client.py`) is provided for testing MCP tool calls
+ without a full Streamlit UI. It connects via SSE and automatically picks up auth credentials from `.env`.
+
+ #### Interactive REPL Mode
+ ```cmd
+ python tests\test_mcp_client.py
+ ```
+ Then type tool calls at the `mcp>` prompt:
+ ```
+ mcp> list
+ mcp> find_mq_object {"search_string": "QL.IN.APP1"}
+ mcp> dspmq {}
+ mcp> get_queue_depth {"queue_name": "QL.IN.APP1"}
+ mcp> quit
+ ```
+
+ #### One-Shot Mode
+ ```cmd
+ python tests\test_mcp_client.py --tool find_mq_object --args "{\"search_string\":\"QL.IN.APP1\"}"
+ ```
+
+ #### List Available Tools
+ ```cmd
+ python tests\test_mcp_client.py --list
+ ```
+
+ > [!TIP]
+ > Override the server URL without editing code by setting `MCP_SERVER_URL` in `.env` or as
+ > an environment variable: `set MCP_SERVER_URL=http://server1:8001/sse`
+
  ### Process-Level Configuration
  When running as a standalone server (e.g., in Claude Desktop), the server needs to know where its dependencies and environment variables are.
  
