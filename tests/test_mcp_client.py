@@ -29,7 +29,7 @@ MCP_AUTH_USER = os.getenv("MCP_AUTH_USER", "")
 MCP_AUTH_PASSWORD = os.getenv("MCP_AUTH_PASSWORD", "")
 MCP_PORT = os.getenv("MQ_MCP_PORT", "5000")
 
-SERVER_URL = f"http://localhost:{MCP_PORT}/sse"
+SERVER_URL = os.getenv("MCP_SERVER_URL", "http://server1:8001/sse")
 
 
 def _auth_headers() -> dict[str, str]:
@@ -148,8 +148,9 @@ async def interactive_mode():
                     print()
 
     except Exception as e:
-        print(f"\n❌ Failed to connect: {e}")
-        print("   Make sure the server is running: python server/mqmcpserver.py")
+        import traceback
+        print(f"\n❌ Failed to connect: {type(e).__name__}: {e}")
+        traceback.print_exc()
         return
 
     print("\n👋 Disconnected.")
