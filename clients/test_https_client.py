@@ -183,20 +183,22 @@ async def run_tests():
                     warn(f"find_mq_object call failed: {e}")
 
                 # ----------------------------------------------------------
-                # Step 3: Call dspmq
+                # Step 3: Call get_queue_depth
                 # ----------------------------------------------------------
-                print(f"\n{BOLD}[4] Calling tool: dspmq{RESET}")
+                print(f"\n{BOLD}[4] Calling tool: get_queue_depth{RESET}")
+                queue_name = "QL.IN.APP1"
+                info(f'Queue: "{queue_name}"')
                 try:
-                    result = await session.call_tool("dspmq", {})
+                    result = await session.call_tool("get_queue_depth", {"queue_name": queue_name})
                     if result.content:
                         output = result.content[0].text
                         for line in output.split("\n")[:10]:
                             print(f"    {line}")
                     else:
                         info("No results returned.")
-                    success("dspmq executed successfully.")
+                    success("get_queue_depth executed successfully.")
                 except Exception as e:
-                    warn(f"dspmq call failed: {e}")
+                    warn(f"get_queue_depth call failed: {e}")
 
     except Exception as e:
         # Unwrap ExceptionGroup if needed
