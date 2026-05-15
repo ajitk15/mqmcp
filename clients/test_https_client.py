@@ -18,6 +18,7 @@ import asyncio
 import os
 import ssl
 import sys
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 # ---------------------------------------------------------------------------
@@ -26,16 +27,12 @@ from dotenv import load_dotenv
 env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
 load_dotenv(dotenv_path=env_path)
 
-MCP_HOST = os.getenv("MQ_MCP_HOST", "127.0.0.1")
-MCP_PORT = os.getenv("MQ_MCP_PORT", "5000")
+
 MCP_AUTH_USER = os.getenv("MCP_AUTH_USER", "")
 MCP_AUTH_PASSWORD = os.getenv("MCP_AUTH_PASSWORD", "")
 
-# Build the SSE endpoint URL
-# 0.0.0.0 is a server bind address (all interfaces), not connectable — use localhost
-CONNECT_HOST = "127.0.0.1" if MCP_HOST == "0.0.0.0" else MCP_HOST
-BASE_URL = f"https://{CONNECT_HOST}:{MCP_PORT}"
-SSE_URL = f"{BASE_URL}/sse"
+# SSE endpoint URL — loaded directly from .env
+SSE_URL = os.getenv("MCP_REMOTE_SERVER_URL", "https://127.0.0.1:5000/sse")
 
 # ---------------------------------------------------------------------------
 # Colour helpers for terminal output
@@ -126,19 +123,22 @@ async def run_tests():
     # Step 0: Quick TCP+TLS handshake check (NOT an HTTP GET on SSE)
     # ------------------------------------------------------------------
     print(f"\n{BOLD}[0] HTTPS Connectivity Check{RESET}")
+    parsed = urlparse(SSE_URL)
+    connect_host = parsed.hostname or "127.0.0.1"
+    connect_port = parsed.port or 443
     try:
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
         reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(CONNECT_HOST, int(MCP_PORT), ssl=ctx),
+            asyncio.open_connection(connect_host, connect_port, ssl=ctx),
             timeout=5.0,
         )
         writer.close()
         await writer.wait_closed()
-        success(f"TLS handshake to {CONNECT_HOST}:{MCP_PORT} succeeded")
+        success(f"TLS handshake to {connect_host}:{connect_port} succeeded")
     except Exception as e:
-        error(f"Cannot reach {BASE_URL}")
+        error(f"Cannot reach {SSE_URL}")
         error(f"  {type(e).__name__}: {e}")
         print(f"\n  Make sure the server is running:")
         print(f"    python server/mqmcpserver.py\n")
