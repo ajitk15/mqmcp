@@ -97,6 +97,12 @@ _MODIFY_BLOCKED_MSG = (
 MCP_AUTH_USER = os.getenv("MCP_AUTH_USER", "")
 MCP_AUTH_PASSWORD = os.getenv("MCP_AUTH_PASSWORD", "")
 
+# SSL/TLS configuration (optional — only applies to SSE transport)
+# Set both to enable HTTPS.  Use MCP_SSL_CERTFILE=auto to generate a
+# self-signed certificate automatically (dev/test only).
+MCP_SSL_CERTFILE = os.getenv("MCP_SSL_CERTFILE", "")
+MCP_SSL_KEYFILE = os.getenv("MCP_SSL_KEYFILE", "")
+
 # ---------------------------------------------------------------------------
 # CSV helpers — cached at module level so disk is only read once per startup
 # ---------------------------------------------------------------------------
@@ -894,6 +900,83 @@ async def verify_connectivity():
 
 
 # ---------------------------------------------------------------------------
+# SSL helper — generate a self-signed certificate for development
+# ---------------------------------------------------------------------------
+def _generate_self_signed_cert(cert_dir: str | None = None) -> tuple[str, str]:
+    """Generate a self-signed certificate and return (certfile, keyfile) paths.
+
+    Requires the 'cryptography' package.  Falls back gracefully with a clear
+    error message if the package is not installed.
+    """
+    try:
+        from cryptography import x509
+        from cryptography.x509.oid import NameOID
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        import datetime
+    except ImportError:
+        raise RuntimeError(
+            "The 'cryptography' package is required for auto-generated "
+            "self-signed certificates.  Install it with:\n"
+            "  pip install cryptography"
+        )
+
+    if cert_dir is None:
+        cert_dir = os.path.join(project_root, "certs")
+    os.makedirs(cert_dir, exist_ok=True)
+
+    cert_path = os.path.join(cert_dir, "server.crt")
+    key_path = os.path.join(cert_dir, "server.key")
+
+    # Reuse existing certificate if it already exists
+    if os.path.exists(cert_path) and os.path.exists(key_path):
+        logger.info("Reusing existing self-signed certificate from %s", cert_dir)
+        return cert_path, key_path
+
+    logger.info("Generating self-signed certificate in %s …", cert_dir)
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+    subject = issuer = x509.Name([
+        x509.NameAttribute(NameOID.COMMON_NAME, "mqmcpserver"),
+        x509.NameAttribute(NameOID.ORGANIZATION_NAME, "MQ MCP Development"),
+    ])
+
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.datetime.utcnow())
+        .not_valid_after(datetime.datetime.utcnow() + datetime.timedelta(days=365))
+        .add_extension(
+            x509.SubjectAlternativeName([
+                x509.DNSName("localhost"),
+                x509.DNSName("*.localhost"),
+                x509.IPAddress(ipaddress.IPv4Address("127.0.0.1")),
+                x509.IPAddress(ipaddress.IPv4Address("0.0.0.0")),
+            ]),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+
+    with open(key_path, "wb") as f:
+        f.write(key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.TraditionalOpenSSL,
+            encryption_algorithm=serialization.NoEncryption(),
+        ))
+
+    with open(cert_path, "wb") as f:
+        f.write(cert.public_bytes(serialization.Encoding.PEM))
+
+    logger.info("Self-signed certificate generated: %s", cert_path)
+    return cert_path, key_path
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
@@ -911,7 +994,34 @@ if __name__ == "__main__":
             "Starting SSE server with Basic Authentication (user: %s)",
             MCP_AUTH_USER,
         )
-        uvicorn.run(app, host=mcp_host, port=mcp_port)
+
+        # --- SSL / HTTPS configuration ---
+        ssl_kwargs: dict = {}
+        if MCP_SSL_CERTFILE:
+            if MCP_SSL_CERTFILE.lower() == "auto":
+                # Auto-generate a self-signed certificate for dev/test
+                import ipaddress
+                cert_path, key_path = _generate_self_signed_cert()
+                ssl_kwargs["ssl_certfile"] = cert_path
+                ssl_kwargs["ssl_keyfile"] = key_path
+            elif MCP_SSL_KEYFILE:
+                ssl_kwargs["ssl_certfile"] = MCP_SSL_CERTFILE
+                ssl_kwargs["ssl_keyfile"] = MCP_SSL_KEYFILE
+            else:
+                logger.warning(
+                    "MCP_SSL_CERTFILE is set but MCP_SSL_KEYFILE is missing — "
+                    "falling back to HTTP."
+                )
+
+        if ssl_kwargs:
+            logger.info(
+                "HTTPS enabled — cert=%s  key=%s",
+                ssl_kwargs["ssl_certfile"], ssl_kwargs["ssl_keyfile"],
+            )
+        else:
+            logger.info("Running over plain HTTP (no SSL configured).")
+
+        uvicorn.run(app, host=mcp_host, port=mcp_port, **ssl_kwargs)
     else:
         if transport == "sse" and not (MCP_AUTH_USER and MCP_AUTH_PASSWORD):
             logger.warning(

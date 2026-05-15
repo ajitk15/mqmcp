@@ -177,3 +177,6 @@ override.tf.json
 .terraformrc
 terraform.rc
 *.bak
+
+# Auto-generated TLS certificates
+certs/
