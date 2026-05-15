@@ -104,14 +104,10 @@ async def run_tests():
 
     import httpx
 
-    # Build auth headers for Basic Authentication
-    headers = {}
+    # Build Basic Auth for the MCP SSE connection
+    auth = None
     if MCP_AUTH_USER and MCP_AUTH_PASSWORD:
-        import base64
-        credentials = base64.b64encode(
-            f"{MCP_AUTH_USER}:{MCP_AUTH_PASSWORD}".encode()
-        ).decode()
-        headers["Authorization"] = f"Basic {credentials}"
+        auth = httpx.BasicAuth(MCP_AUTH_USER, MCP_AUTH_PASSWORD)
         info(f"Using Basic Auth (user: {MCP_AUTH_USER})")
     else:
         warn("No authentication configured — connecting without credentials.")
@@ -151,7 +147,7 @@ async def run_tests():
     try:
         async with sse_client(
             SSE_URL,
-            headers=headers,
+            auth=auth,
             httpx_client_factory=_make_insecure_httpx_client,
         ) as streams:
             async with ClientSession(streams[0], streams[1]) as session:
